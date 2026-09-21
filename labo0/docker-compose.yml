@@ -1,0 +1,18 @@
+services:
+  gridd-kafka-consumer:
+    build: .
+    container_name: gridd-kafka-consumer
+    restart: unless-stopped
+    # Variables de connexion chargees depuis .env (copier .env.local -> .env)
+    env_file:
+      - .env
+    volumes:
+      # Certificat CA : chemin sur l'hote (KAFKA_SSL_CA_HOST_PATH, defini dans
+      # .env) monte en lecture seule au chemin attendu dans le conteneur
+      # (KAFKA_SSL_CA_LOCATION)
+      - "${KAFKA_SSL_CA_HOST_PATH}:${KAFKA_SSL_CA_LOCATION:-/etc/gridd/kafka/gridd-kafka-ca.crt}:ro"
+      # Persistance des donnees consommees
+      - gridd-data:/var/lib/gridd/data
+
+volumes:
+  gridd-data:
