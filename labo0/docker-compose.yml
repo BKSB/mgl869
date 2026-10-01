@@ -1,18 +1,37 @@
+# Lancer depuis la racine du projet avec le .env du backend :
+#   docker compose --env-file backend/.env up -d --build
 services:
   gridd-kafka-consumer:
-    build: .
+    build: ./backend
     container_name: gridd-kafka-consumer
     restart: unless-stopped
-    # Variables de connexion chargees depuis .env (copier .env.local -> .env)
+    # Variables de connexion chargees depuis backend/.env
+    # (copier backend/.env.local -> backend/.env)
     env_file:
-      - .env
+      - ./backend/.env
+    ports:
+      # API HTTP + WebSocket : ws://localhost:8000/ws/<topic>
+      - "8000:8000"
     volumes:
-      # Certificat CA : chemin sur l'hote (KAFKA_SSL_CA_HOST_PATH, defini dans
-      # .env) monte en lecture seule au chemin attendu dans le conteneur
-      # (KAFKA_SSL_CA_LOCATION)
-      - "${KAFKA_SSL_CA_HOST_PATH}:${KAFKA_SSL_CA_LOCATION:-/etc/gridd/kafka/gridd-kafka-ca.crt}:ro"
+      # Certificat CA : chemin sur l'hote (KAFKA_SSL_CA_HOST_PATH) monte en
+      # lecture seule au chemin attendu dans le conteneur. L'interpolation
+      # exige le flag --env-file backend/.env (voir commande ci-dessus).
+      - "${KAFKA_SSL_CA_HOST_PATH:?Lancer avec : docker compose --env-file backend/.env up -d}:/etc/gridd/kafka/gridd-kafka-ca.crt:ro"
+      # Configuration des topics : editable sans rebuild (redemarrage suffit)
+      - ./backend/config:/srv/gridd/config:ro
       # Persistance des donnees consommees
       - gridd-data:/var/lib/gridd/data
+
+  gridd-dashboard:
+    build: ./frontend
+    container_name: gridd-dashboard
+    restart: unless-stopped
+    depends_on:
+      - gridd-kafka-consumer
+    ports:
+      # Dashboard : http://localhost:8080 (nginx sert le build Vite et
+      # relaie /api et /ws vers le backend)
+      - "8080:80"
 
 volumes:
   gridd-data:

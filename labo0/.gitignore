@@ -1,16 +1,16 @@
-# Configuration locale avec les vraies valeurs de connexion
-.env
-
-# Le modele vide .env.local reste versionne
-!.env.local
+# Secrets — jamais versionnes, ou qu'ils soient
+**/.env
+!**/.env.local
+*.crt
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 
+# Node / frontend
+node_modules/
+dist/
+
 # Donnees consommees
 *.jsonl
-
-# Certificat
-*.crt
