@@ -41,17 +41,15 @@ propres offsets. Consommateurs et serveur WebSocket partagent la meme boucle
 d'evenements. Les messages de chaque topic sont ecrits dans un fichier JSONL
 distinct (`<topic>.jsonl`).
 
-### Topics par defaut
+### Topics consommes
 
-Suivant la convention `gridd.<data_category>.<domain>.<data_type>` :
+Definis dans `backend/config/topics.yaml` (seule source de la liste), suivant la convention `gridd.<data_category>.<domain>.<data_type>` :
 
 - `gridd.obs.environmental.temperature`
 - `gridd.obs.environmental.humidity`
 - `gridd.obs.environmental.co2`
 - `gridd.obs.acoustic.sound_level`
 - `gridd.obs.occupancy.count`
-
-Surchargables via `KAFKA_TOPICS` (liste separee par des virgules).
 
 ### Configuration (variables d'environnement)
 
@@ -64,13 +62,10 @@ Surchargables via `KAFKA_TOPICS` (liste separee par des virgules).
 | `KAFKA_PASSWORD` | — | Kafka password (requis en SASL) |
 | `KAFKA_SSL_CA_HOST_PATH` | — | CA certificate : chemin sur l'hote (monte en volume) |
 | `KAFKA_SSL_CA_LOCATION` | `/etc/gridd/kafka/gridd-kafka-ca.crt` | CA certificate : chemin dans le conteneur |
-| `KAFKA_TOPICS` | topics gridd ci-dessus | Topics a consommer |
 | `KAFKA_GROUP_ID_PREFIX` | `gridd-consumer` | Prefixe du `group.id` par topic |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` | Position initiale sans offset commite |
 | `OUTPUT_DIR` | `/var/lib/gridd/data` | Repertoire des fichiers JSONL |
 | `TOPICS_CONFIG` | `config/topics.yaml` | Fichier YAML des topics et de leurs historiques |
-| `HISTORY_PER_SENSOR` | `100` | Defaut d'historique par capteur quand le YAML ne le fixe pas |
-| `WARMUP_MESSAGES` | `1000` | Defaut de prechauffage quand le YAML ne le fixe pas |
 
 ### Configuration des topics (`backend/config/topics.yaml`)
 
@@ -90,8 +85,10 @@ topics:
 ```
 
 `warmup_messages` se dimensionne ainsi : `history_per_sensor x nb de capteurs
-du topic / nb de partitions`, arrondi au-dessus. Si le fichier est absent, le
-service retombe sur `KAFKA_TOPICS` et les defauts d'environnement.
+du topic / nb de partitions`, arrondi au-dessus. `history_per_sensor` vaut
+100 s'il n'est fixe ni sur le topic ni dans `defaults`. Le fichier est
+obligatoire : s'il est absent ou ne definit aucun topic, le service refuse
+de demarrer.
 
 ### Fichiers d'environnement
 
@@ -111,7 +108,7 @@ tableau ci-dessus.
 Chaque topic a son propre flux WebSocket : un client s'abonne a l'URL du
 topic qui l'interesse et recoit chaque message Kafka en JSON des sa
 reception (en plus de l'archivage JSONL). A la connexion, les derniers
-messages de chaque capteur du topic (`HISTORY_PER_SENSOR` par capteur,
+messages de chaque capteur du topic (`history_per_sensor` du YAML,
 100 par defaut) sont rejoues en ordre chronologique, puis le flux continue
 en temps reel — les dashboards affichent donc une courbe des l'ouverture
 pour tous les capteurs, meme les plus lents.
@@ -155,3 +152,22 @@ KAFKA_SSL_CA_LOCATION=/chemin/vers/gridd-kafka-ca.crt python -m app.main
 
 L'arret se fait proprement sur `SIGINT`/`SIGTERM` : chaque consommateur
 commit ses offsets apres traitement de chaque message, puis se ferme.
+
+### Tests
+
+Tests unitaires (pytest) dans `backend/tests/` : hub WebSocket, consommateur,
+prechauffage d'historique, configuration, couche service et API. Kafka est
+simule, aucun broker n'est necessaire.
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest
+# avec couverture (comme la CI)
+python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=90
+```
+
+La CI GitHub Actions (`.github/workflows/backend-tests.yml` a la racine du
+depot) lance ces tests a chaque push sur `main` et a chaque pull request
+touchant `labo0/backend/` ; elle echoue si un test casse ou si la couverture
+passe sous 90 %.

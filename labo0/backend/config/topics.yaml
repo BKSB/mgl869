@@ -11,16 +11,14 @@
 # Les valeurs omises sur un topic prennent celles de `defaults`.
 
 defaults:
-  history_per_sensor: 100
-  warmup_messages: 1000
+  history_per_sensor: 500
+  warmup_messages: 5000
 
 topics:
   gridd.obs.environmental.temperature: {}
   gridd.obs.environmental.humidity: {}
   gridd.obs.environmental.co2: {}
   gridd.obs.acoustic.sound_level:
-    # Publie toutes les 6 s : 1800 messages ~ 3 h d'historique par capteur.
-    # 4 capteurs sur 1 partition -> relire 8000 messages au demarrage.
     history_per_sensor: 1800
     warmup_messages: 8000
   gridd.obs.occupancy.count: {}

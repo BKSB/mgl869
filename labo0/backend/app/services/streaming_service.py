@@ -39,7 +39,7 @@ class StreamingService:
                           f"protocole {self._settings.security_protocol}")
 
         if not self._settings.topics:
-            errors.append("Aucun topic configure (KAFKA_TOPICS)")
+            errors.append("Aucun topic configure (config/topics.yaml)")
 
         return errors
 

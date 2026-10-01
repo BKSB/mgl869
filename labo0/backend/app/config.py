@@ -2,25 +2,18 @@
 
 Connexion Kafka : variables d'environnement (backend/.env).
 Topics et historiques : fichier YAML (TOPICS_CONFIG, backend/config/topics.yaml),
-avec repli sur KAFKA_TOPICS / les defauts si le fichier est absent.
+seule source de la liste des topics.
 """
 
-import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_TOPICS = [
-    "gridd.obs.environmental.temperature",
-    "gridd.obs.environmental.humidity",
-    "gridd.obs.environmental.co2",
-    "gridd.obs.acoustic.sound_level",
-    "gridd.obs.occupancy.count",
-]
+# Defauts quand le YAML ne fixe la valeur ni sur le topic ni dans `defaults`
+DEFAULT_HISTORY_PER_SENSOR = 100
+DEFAULT_WARMUP_MESSAGES = 1000
 
 
 def _env(name: str, default: str) -> str:
@@ -39,34 +32,30 @@ class TopicConfig:
     warmup_messages: int
 
 
-def _load_topic_configs(default_history: int, default_warmup: int) -> list[TopicConfig]:
-    """Charge les topics depuis le YAML ; repli sur KAFKA_TOPICS / defauts."""
+def _load_topic_configs() -> list[TopicConfig]:
+    """Charge la liste des topics et leurs reglages depuis le YAML."""
     path = Path(_env("TOPICS_CONFIG", "config/topics.yaml"))
-    if path.is_file():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        defaults = data.get("defaults") or {}
-        default_history = int(defaults.get("history_per_sensor", default_history))
-        default_warmup = int(defaults.get("warmup_messages", default_warmup))
-        topics = data.get("topics") or {}
-        if not topics:
-            raise ValueError(f"{path} : aucun topic defini sous la cle 'topics'")
-        return [
-            TopicConfig(
-                name=name,
-                history_per_sensor=int((cfg or {}).get("history_per_sensor",
-                                                       default_history)),
-                warmup_messages=int((cfg or {}).get("warmup_messages",
-                                                    default_warmup)),
-            )
-            for name, cfg in topics.items()
-        ]
-
-    logger.warning("Fichier de topics introuvable (%s) : repli sur "
-                   "KAFKA_TOPICS / topics par defaut", path)
-    names = [t.strip()
-             for t in _env("KAFKA_TOPICS", ",".join(DEFAULT_TOPICS)).split(",")
-             if t.strip()]
-    return [TopicConfig(name, default_history, default_warmup) for name in names]
+    if not path.is_file():
+        raise FileNotFoundError(f"Fichier de topics introuvable : {path}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    defaults = data.get("defaults") or {}
+    default_history = int(defaults.get("history_per_sensor",
+                                       DEFAULT_HISTORY_PER_SENSOR))
+    default_warmup = int(defaults.get("warmup_messages",
+                                       DEFAULT_WARMUP_MESSAGES))
+    topics = data.get("topics") or {}
+    if not topics:
+        raise ValueError(f"{path} : aucun topic defini sous la cle 'topics'")
+    return [
+        TopicConfig(
+            name=name,
+            history_per_sensor=int((cfg or {}).get("history_per_sensor",
+                                                   default_history)),
+            warmup_messages=int((cfg or {}).get("warmup_messages",
+                                                default_warmup)),
+        )
+        for name, cfg in topics.items()
+    ]
 
 
 @dataclass
@@ -88,12 +77,8 @@ class Settings:
     # Repertoire ou chaque topic ecrit ses messages (un fichier JSONL par topic)
     output_dir: str = _env("OUTPUT_DIR", "/var/lib/gridd/data")
 
-    # Topics et leurs reglages, charges du YAML (defauts surchargables par
-    # HISTORY_PER_SENSOR / WARMUP_MESSAGES quand le YAML ne les fixe pas)
-    topic_configs: list[TopicConfig] = field(default_factory=lambda: _load_topic_configs(
-        default_history=int(_env("HISTORY_PER_SENSOR", "100")),
-        default_warmup=int(_env("WARMUP_MESSAGES", "1000")),
-    ))
+    # Topics et leurs reglages, charges du YAML
+    topic_configs: list[TopicConfig] = field(default_factory=_load_topic_configs)
 
     @property
     def topics(self) -> list[str]:
