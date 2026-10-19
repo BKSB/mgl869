@@ -1,178 +1,57 @@
-.dashboard {
-  height: 100dvh;
+/* Coquille de l'application : colonne verticale, contenu centre <= 1760 px,
+ * remplissage 100dvh seulement quand l'ecran est assez haut. La coquille ne
+ * defile jamais en interne : c'est la page qui defile si le contenu depasse. */
+
+.shell {
   display: flex;
   flex-direction: column;
-  padding: 16px 24px 20px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+  padding-inline: var(--gutter);
+  padding-bottom: var(--sp-4);
 }
 
-.masthead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+.shell > * {
+  min-width: 0;
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
 }
 
-.masthead h1 {
-  margin: 0;
-  font-size: 22px;
+/* L'app bar s'etend d'un bord a l'autre ; son contenu reste centre */
+.shell > .appbar {
+  max-width: none;
+  width: auto;
+  margin-inline: calc(-1 * var(--gutter));
+  padding-inline: var(--gutter);
 }
 
-.status {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.status::before {
-  content: '';
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-  background: var(--muted);
-}
-
-.status-live::before { background: var(--status-good); }
-.status-connecting::before { background: var(--status-warning); }
-.status-disconnected::before { background: var(--status-critical); }
-
-/* Selecteurs (topics, capteurs, plage temporelle) */
-.filters-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.topic-picker,
-.sensor-picker,
-.range-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 16px 0 0;
-}
-
-.topic-picker button,
-.sensor-picker button,
-.range-picker button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-1);
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.topic-picker button:hover,
-.sensor-picker button:hover,
-.range-picker button:hover {
-  color: var(--text-primary);
-}
-
-.range-picker button {
-  padding: 5px 12px;
-  font-size: 13px;
-}
-
-.range-picker button.active {
-  border-color: var(--text-primary);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.topic-picker button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-  font-weight: 600;
-}
-
-.sensor-picker button {
-  padding: 5px 12px;
-  font-size: 13px;
-}
-
-.sensor-picker button.active {
-  border-color: var(--text-primary);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-/* Panneau du graphe : occupe tout l'espace restant de la page */
-.chart-panel {
-  flex: 1;
-  min-height: 0;
+/* Landmark main : onglets, filtres, tiles, carte. Prend la hauteur libre
+ * sous l'app bar (la carte la remplit). */
+.shell__main {
   display: flex;
   flex-direction: column;
-  margin-top: 16px;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 16px 8px;
+  flex: 1 0 auto;
+}
+.shell__main > * {
+  min-width: 0;
+}
+/* Cible du lien d'evitement (tabindex -1) : pas d'anneau autour de toute la
+ * zone, le focus clavier reprend au premier onglet */
+.shell__main:focus {
+  outline: none;
 }
 
-.chart-area {
+.card.hero {
   flex: 1;
-  min-height: 0;
 }
 
-/* Legende : dernieres valeurs par capteur affiche */
-.legend {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 20px;
-  margin: 8px 0 8px;
-  padding: 0 8px;
+.tiles {
+  margin-bottom: var(--sp-3);
 }
 
-.legend li {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.legend .dot {
-  align-self: center;
-}
-
-.legend-id {
-  color: var(--text-primary);
-}
-
-.legend strong {
-  font-size: 15px;
-  color: var(--text-primary);
-}
-
-.legend-zone {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.legend {
-  flex-shrink: 0;
-}
-
-.empty {
-  color: var(--muted);
-  text-align: center;
-  margin: auto;
-}
+/* Verrou 100dvh (>= 1024 x 800) : en fin de components.css, pour primer sur
+ * les regles des composants (.chart-area, .datatable) dans la cascade. Pas de
+ * height ni d'overflow sur .shell : min-height 100dvh + flex suffisent a
+ * remplir l'ecran, et un contenu trop haut fait defiler la page. */

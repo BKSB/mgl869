@@ -8,5 +8,11 @@ const LABELS: Record<string, string> = {
   'gridd.obs.occupancy.count': 'Occupation',
 }
 
-export const topicLabel = (name: string): string =>
-  LABELS[name] ?? name.split('.').slice(-1)[0].replace(/_/g, ' ')
+/** Libelle d'un topic ; repli sur le dernier segment du nom, avec une
+ * majuscule, comme les messages du backend (« Wind speed »). */
+export function topicLabel(name: string): string {
+  const label = LABELS[name]
+  if (label) return label
+  const last = name.split('.').slice(-1)[0].replace(/_/g, ' ')
+  return last.charAt(0).toUpperCase() + last.slice(1)
+}

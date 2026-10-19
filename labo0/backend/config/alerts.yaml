@@ -1,0 +1,52 @@
+# Regles d'alerte evaluees sur chaque mesure temps reel (ALERTS_CONFIG).
+#
+# VALEURS INDICATIVES, A VALIDER avec les responsables des donnees avant tout
+# usage operationnel (reperes usuels de confort en batiment) :
+#   CO2           : warning > 1000 ppm, critical > 1500 ppm (hysteresis 50)
+#   Temperature   : warning < 18 et > 26 degC, critical < 16 et > 28 degC
+#                   (hysteresis 0.5)
+#   Humidite      : warning < 25 et > 60 %, critical < 20 et > 70 %
+#                   (hysteresis 2)
+#   Niveau sonore : warning > 65 dB, critical > 80 dB (hysteresis 2)
+#   Occupation    : aucune regle active (capacite des salles inconnue)
+#
+# Format d'une regle : { severity: warning|critical, above|below: <seuil>,
+#                        hysteresis: <ecart >= 0, optionnel> }
+#   above : alerte si valeur > seuil ; fin quand valeur <= seuil - hysteresis
+#   below : alerte si valeur < seuil ; fin quand valeur >= seuil + hysteresis
+# Le niveau d'un capteur est la severite la plus haute de ses regles actives.
+# Une hysteresis omise prend celle de `defaults` (0 si absente).
+#
+# Fichier absent : alertes desactivees (le service demarre). Fichier invalide,
+# ou regle sur un topic absent de topics.yaml : le service refuse de demarrer.
+# Modifiable sans rebuild (dossier monte dans le conteneur) : redemarrer.
+
+defaults:
+  hysteresis: 0
+
+rules:
+  gridd.obs.environmental.co2:
+    - { severity: warning, above: 1000, hysteresis: 50 }
+    - { severity: critical, above: 1500, hysteresis: 50 }
+
+  gridd.obs.environmental.temperature:
+    - { severity: warning, below: 18, hysteresis: 0.5 }
+    - { severity: warning, above: 26, hysteresis: 0.5 }
+    - { severity: critical, below: 16, hysteresis: 0.5 }
+    - { severity: critical, above: 28, hysteresis: 0.5 }
+
+  gridd.obs.environmental.humidity:
+    - { severity: warning, below: 25, hysteresis: 2 }
+    - { severity: warning, above: 60, hysteresis: 2 }
+    - { severity: critical, below: 20, hysteresis: 2 }
+    - { severity: critical, above: 70, hysteresis: 2 }
+
+  gridd.obs.acoustic.sound_level:
+    - { severity: warning, above: 65, hysteresis: 2 }
+    - { severity: critical, above: 80, hysteresis: 2 }
+
+  # Occupation : aucune regle tant que la capacite des salles est inconnue.
+  # Exemple a adapter (seuil en personnes) avant de le decommenter :
+  # gridd.obs.occupancy.count:
+  #   - { severity: warning, above: 30 }
+  #   - { severity: critical, above: 40 }

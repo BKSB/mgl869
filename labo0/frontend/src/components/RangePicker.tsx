@@ -1,31 +1,31 @@
-/** Fenetre temporelle affichee, en millisecondes ('all' = tout l'historique). */
-export type TimeRange = number | 'all'
+import { SegmentedControl } from './SegmentedControl'
+import { RANGE_PRESETS } from '../lib/ranges'
+import type { TimeRange } from '../lib/ranges'
 
-const PRESETS: { label: string; value: TimeRange }[] = [
-  { label: '15 min', value: 15 * 60_000 },
-  { label: '1 h', value: 60 * 60_000 },
-  { label: '3 h', value: 3 * 60 * 60_000 },
-  { label: 'Tout', value: 'all' },
-]
+export type { TimeRange } from '../lib/ranges'
 
 interface Props {
   selected: TimeRange
   onSelect: (range: TimeRange) => void
+  grow?: boolean
 }
 
-/** Preselections de plage temporelle (fenetre glissante sur le graphe). */
-export function RangePicker({ selected, onSelect }: Props) {
+const OPTIONS = RANGE_PRESETS.map((p, i) => ({
+  value: String(p.value),
+  label: p.label,
+  title: `Raccourci ${i + 1}`,
+}))
+
+/** Preselections de plage temporelle (fenetre glissante, coche 16 px). */
+export function RangePicker({ selected, onSelect, grow }: Props) {
   return (
-    <nav className="range-picker" aria-label="Plage temporelle">
-      {PRESETS.map(({ label, value }) => (
-        <button
-          key={label}
-          className={value === selected ? 'active' : ''}
-          onClick={() => onSelect(value)}
-        >
-          {label}
-        </button>
-      ))}
-    </nav>
+    <SegmentedControl<string>
+      ariaLabel="Plage temporelle"
+      showCheck
+      grow={grow}
+      options={OPTIONS}
+      value={String(selected)}
+      onChange={(v) => onSelect(v === 'all' ? 'all' : Number(v))}
+    />
   )
 }

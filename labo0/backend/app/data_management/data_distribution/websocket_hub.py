@@ -5,11 +5,17 @@ Chaque topic a son propre canal : un client s'abonne au flux d'un seul topic
 la meme boucle asyncio : aucune synchronisation inter-threads n'est
 necessaire, et entre deux `await` rien ne peut s'intercaler (l'abonnement et
 la publication sont naturellement atomiques).
+
+Le hub est un observateur du bus de records (app/data_management/record_bus.py) :
+il recoit chaque record via `on_record`, sans dependre de l'acquisition.
 """
 
 import asyncio
 import logging
 from collections import deque
+
+from app.data_management.data_distribution.queues import offer_dropping_oldest
+from app.data_management.records import sensor_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +42,6 @@ class TopicHub:
         self._history_sizes = history_per_sensor or {}
         self._default_history = default_history
 
-    @staticmethod
-    def _sensor_id(record: dict) -> str:
-        """Identifiant du capteur : node_id du payload, sinon la cle Kafka."""
-        value = record.get("value")
-        if isinstance(value, dict) and value.get("node_id"):
-            return str(value["node_id"])
-        return record.get("key") or "_sans_node_id"
-
     def subscribe(self, topic: str) -> asyncio.Queue:
         sensors = self._history.get(topic, {})
         replay = [r for records in sensors.values() for r in records]
@@ -63,8 +61,18 @@ class TopicHub:
     def unsubscribe(self, topic: str, queue: asyncio.Queue) -> None:
         self._subscribers.get(topic, set()).discard(queue)
 
+    async def on_record(self, topic: str, record: dict, *, replay: bool) -> None:
+        """Observateur du bus de records (protocole RecordObserver).
+
+        Les records rejoues (replay=True) sont traites comme les autres :
+        remplir l'historique par capteur au demarrage est justement le role
+        du prechauffage. La deduplication (partition, offset) de `publish`
+        rend l'operation idempotente. Aucun `await` : la publication reste
+        atomique vis-a-vis des abonnements WebSocket."""
+        self.publish(topic, record)
+
     def publish(self, topic: str, record: dict) -> None:
-        sensor = self._sensor_id(record)
+        sensor = sensor_id(record)
         key = (record.get("partition"), record.get("offset"))
         size = self._history_sizes.get(topic, self._default_history)
         records = self._history.setdefault(topic, {}).setdefault(
@@ -74,19 +82,13 @@ class TopicHub:
         # offsets commites peuvent relire le meme message
         if any((r.get("partition"), r.get("offset")) == key for r in records):
             return
+        # Copie historisee et diffusee avec l'identifiant du capteur : les
+        # clients regroupent les series (et retrouvent les alertes, dont le
+        # node_id vient de la meme fonction) sans redefinir cette identite.
+        # Le record partage avec les autres observateurs n'est pas modifie.
+        record = {**record, "sensor_id": sensor}
         records.append(record)
+        # Client trop lent : il perd ses messages les plus anciens plutot
+        # que de bloquer les autres
         for queue in self._subscribers.get(topic, ()):
-            self._offer(queue, record)
-
-    @staticmethod
-    def _offer(queue: asyncio.Queue, record: dict) -> None:
-        """Depose un message ; si le client est trop lent, jette le plus
-        ancien plutot que de bloquer les autres."""
-        try:
-            queue.put_nowait(record)
-        except asyncio.QueueFull:
-            try:
-                queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            queue.put_nowait(record)
+            offer_dropping_oldest(queue, record)

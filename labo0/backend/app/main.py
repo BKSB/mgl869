@@ -1,6 +1,7 @@
-"""Composition root : construit la configuration, le hub, le service et
-l'application FastAPI, puis lance le serveur. Toute la logique vit dans
-la couche service (app/services) ; les routes dans la couche API (app/api)."""
+"""Composition root : construit la configuration, le hub, le service
+d'alertes, le bus de records et ses observateurs, le service et
+l'application FastAPI, puis lance le serveur. Toute la logique vit dans la
+couche service (app/services) ; les routes dans la couche API (app/api)."""
 
 import asyncio
 import logging
@@ -13,6 +14,8 @@ from fastapi import FastAPI
 from app.api.routes import router
 from app.config import Settings
 from app.data_management.data_distribution.websocket_hub import TopicHub
+from app.data_management.record_bus import RecordBus
+from app.services.alert_service import AlertService
 from app.services.streaming_service import StreamingService
 
 logging.basicConfig(
@@ -22,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_app(service: StreamingService) -> FastAPI:
+def create_app(service: StreamingService, alerts: AlertService) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         service.start()
@@ -33,8 +36,20 @@ def create_app(service: StreamingService) -> FastAPI:
 
     app = FastAPI(title="gridd-kafka-consumer", lifespan=lifespan)
     app.state.streaming = service
+    app.state.alerts = alerts
     app.include_router(router)
     return app
+
+
+def create_bus(hub: TopicHub, alerts: AlertService) -> RecordBus:
+    """Patron Observateur : l'acquisition publie chaque record sur le bus,
+    qui notifie ses observateurs dans l'ordre d'inscription. Les futurs
+    observateurs (registre des capteurs, historique en base, qualite des
+    donnees) s'inscrivent ICI, sans toucher a l'acquisition."""
+    bus = RecordBus()
+    bus.subscribe(hub)     # diffusion WebSocket (1er : flux temps reel d'abord)
+    bus.subscribe(alerts)  # evaluation des regles d'alerte
+    return bus
 
 
 def main() -> int:
@@ -43,7 +58,8 @@ def main() -> int:
         history_per_sensor={t.name: t.history_per_sensor
                             for t in settings.topic_configs},
     )
-    service = StreamingService(settings, hub)
+    alerts = AlertService(settings.alerts)
+    service = StreamingService(settings, hub, create_bus(hub, alerts))
 
     errors = service.validate()
     if errors:
@@ -51,7 +67,8 @@ def main() -> int:
             logger.error(error)
         return 1
 
-    uvicorn.run(create_app(service), host="0.0.0.0", port=8000, log_config=None)
+    uvicorn.run(create_app(service, alerts), host="0.0.0.0", port=8000,
+                log_config=None)
     return 0
 
 

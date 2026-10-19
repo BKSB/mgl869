@@ -1,9 +1,11 @@
 """Tests du hub de diffusion WebSocket (historique par capteur, rejeu,
-deduplication, clients lents)."""
+deduplication, clients lents) et de son role d'observateur du bus de
+records."""
 
 import asyncio
 
 from app.data_management.data_distribution.websocket_hub import TopicHub
+from app.data_management.record_bus import RecordBus
 from tests.conftest import make_record
 
 
@@ -14,19 +16,38 @@ def drain(queue: asyncio.Queue) -> list[dict]:
     return items
 
 
-class TestSensorId:
-    def test_node_id_du_payload(self):
-        assert TopicHub._sensor_id(make_record(node_id="n42", key="k")) == "n42"
+def avec_capteur(record: dict, sensor: str = "n1") -> dict:
+    """Record tel que diffuse par le hub : copie avec son sensor_id."""
+    return {**record, "sensor_id": sensor}
 
-    def test_repli_sur_la_cle_kafka(self):
-        assert TopicHub._sensor_id(make_record(node_id=None, key="k1")) == "k1"
 
-    def test_payload_non_dict(self):
-        record = {"value": "texte brut", "key": "k2"}
-        assert TopicHub._sensor_id(record) == "k2"
+class TestIdentificationDuCapteur:
+    def test_historique_par_capteur_selon_l_identifiant_partage(self):
+        """Le hub regroupe par l'identifiant de app.data_management.records
+        (node_id, sinon cle Kafka), le meme que le service d'alertes."""
+        hub = TopicHub(history_per_sensor={"t": 1})
+        hub.publish("t", make_record(node_id=None, key="k1", offset=0))
+        hub.publish("t", make_record(node_id="k1", offset=1))
+        hub.publish("t", make_record(node_id="n2", offset=2))
 
-    def test_sans_node_id_ni_cle(self):
-        assert TopicHub._sensor_id(make_record(node_id=None)) == "_sans_node_id"
+        assert sorted(r["offset"] for r in drain(hub.subscribe("t"))) == [1, 2]
+
+    def test_records_diffuses_avec_l_identifiant_du_capteur(self):
+        """Les clients recoivent l'identifiant calcule par le backend : ils
+        n'ont pas a redefinir l'identite d'un capteur (alertes comprises)."""
+        hub = TopicHub()
+        queue = hub.subscribe("t")
+        sans_id = make_record(node_id=None, key=None, offset=0)
+        par_cle = make_record(node_id=None, key="k1", offset=1)
+        vide = make_record(node_id="", key="k2", offset=2)
+
+        for record in (sans_id, par_cle, vide):
+            hub.publish("t", record)
+
+        assert [r["sensor_id"] for r in drain(queue)] == \
+            ["_sans_node_id", "k1", "k2"]
+        # Le record partage avec les autres observateurs n'est pas modifie
+        assert "sensor_id" not in sans_id
 
 
 class TestSubscribe:
@@ -70,8 +91,8 @@ class TestPublish:
         record = make_record(offset=7)
         hub.publish("t", record)
 
-        assert drain(q1) == [record]
-        assert drain(q2) == [record]
+        assert drain(q1) == [avec_capteur(record)]
+        assert drain(q2) == [avec_capteur(record)]
         assert drain(other) == []
 
     def test_desabonnement(self):
@@ -126,3 +147,50 @@ class TestPublish:
             hub.publish("t", make_record(offset=i))
 
         assert [r["offset"] for r in drain(queue)] == [2, 3]
+
+
+class TestObservateurDuBus:
+    async def test_on_record_diffuse_et_historise(self):
+        hub = TopicHub()
+        queue = hub.subscribe("t")
+        record = make_record(offset=1)
+
+        await hub.on_record("t", record, replay=False)
+
+        assert drain(queue) == [avec_capteur(record)]
+        assert drain(hub.subscribe("t")) == [avec_capteur(record)]
+
+    async def test_records_rejoues_aussi_diffuses_et_historises(self):
+        """Le hub ne filtre pas replay=True : remplir l'historique au
+        demarrage est le role du prechauffage."""
+        hub = TopicHub()
+        queue = hub.subscribe("t")
+
+        await hub.on_record("t", make_record(offset=1), replay=True)
+
+        assert [r["offset"] for r in drain(queue)] == [1]
+        assert [r["offset"] for r in drain(hub.subscribe("t"))] == [1]
+
+    async def test_on_record_idempotent(self):
+        """Un record relu par le prechauffage puis consomme en temps reel
+        n'est diffuse et historise qu'une fois."""
+        hub = TopicHub()
+        queue = hub.subscribe("t")
+
+        await hub.on_record("t", make_record(offset=5), replay=True)
+        await hub.on_record("t", make_record(offset=5), replay=False)
+
+        assert len(drain(queue)) == 1
+        assert len(drain(hub.subscribe("t"))) == 1
+
+    async def test_inscrit_sur_le_bus(self):
+        hub = TopicHub()
+        queue_a, queue_b = hub.subscribe("a"), hub.subscribe("b")
+        bus = RecordBus()
+        bus.subscribe(hub)
+
+        await bus.publish("a", make_record(topic="a", offset=1))
+        await bus.publish("b", make_record(topic="b", offset=2), replay=True)
+
+        assert [r["offset"] for r in drain(queue_a)] == [1]
+        assert [r["offset"] for r in drain(queue_b)] == [2]

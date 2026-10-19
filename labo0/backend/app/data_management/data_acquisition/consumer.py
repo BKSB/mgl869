@@ -8,6 +8,7 @@ WebSocket (aucun pont inter-threads necessaire).
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aiokafka import AIOKafkaConsumer
@@ -39,10 +40,13 @@ def _append_line(out, line: str) -> None:
 
 
 async def consume_topic(topic: str, consumer_config: dict, output_dir: str,
-                        on_record) -> None:
+                        on_record: Callable[[dict], Awaitable[None]]) -> None:
     """Consomme un topic : chaque message est archive dans le fichier JSONL
-    du topic puis transmis a `on_record` (diffusion WebSocket). L'offset est
-    commite apres traitement. S'arrete proprement sur annulation."""
+    du topic puis transmis a la coroutine `on_record` (publication sur le bus
+    de records, qui notifie tous les observateurs, dont le hub WebSocket).
+    L'offset n'est commite qu'une fois `on_record` termine : un arret pendant
+    le traitement fait relire le message (livraison "au moins une fois").
+    S'arrete proprement sur annulation."""
     output_path = Path(output_dir) / f"{topic}.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +61,8 @@ async def consume_topic(topic: str, consumer_config: dict, output_dir: str,
                 # Ecriture fichier bloquante : hors de la boucle asyncio,
                 # pour ne jamais geler les autres topics ni les WebSockets
                 await asyncio.to_thread(_append_line, out, line)
-                on_record(record)
+                # Notification AVANT commit : garantie "au moins une fois"
+                await on_record(record)
                 await consumer.commit()
                 logger.info("[%s] partition=%d offset=%d recu",
                             msg.topic, msg.partition, msg.offset)

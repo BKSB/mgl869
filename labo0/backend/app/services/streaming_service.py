@@ -1,24 +1,42 @@
 """Couche service : orchestre l'acquisition (consommateurs Kafka) et la
-distribution (hub WebSocket). Seul point d'entree de la couche API vers les
-donnees -- l'API ne connait ni Kafka, ni le hub, ni les taches."""
+distribution (bus de records et ses observateurs, dont le hub WebSocket).
+Point d'entree de la couche API vers les flux de donnees (les alertes ont
+le leur, l'AlertService) -- l'API ne connait ni Kafka, ni le hub, ni les
+taches."""
 
 import asyncio
 import logging
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.config import Settings
 from app.data_management.data_acquisition.consumer import consume_topic
 from app.data_management.data_acquisition.history_warmup import warmup_topic
 from app.data_management.data_distribution.websocket_hub import TopicHub
+from app.data_management.record_bus import RecordBus
 
 logger = logging.getLogger(__name__)
 
 
 class StreamingService:
 
-    def __init__(self, settings: Settings, hub: TopicHub) -> None:
+    # Un record horodate plus de 5 min avant le demarrage du service est un
+    # rattrapage (retard accumule pendant un arret, ou toute la retention
+    # quand le groupe n'a pas d'offset commite) : il est publie comme rejoue.
+    # Les records d'un arret plus court restent du temps reel.
+    BACKLOG_GRACE_MS = 5 * 60_000
+
+    def __init__(self, settings: Settings, hub: TopicHub,
+                 bus: RecordBus) -> None:
+        """`bus` : bus de records sur lequel l'acquisition publie, construit
+        par le composition root, qui y inscrit les observateurs dans l'ordre
+        voulu. Le service y inscrit lui-meme le hub, dont dependent ses
+        abonnements WebSocket (sans effet s'il l'est deja)."""
         self._settings = settings
         self._hub = hub
+        self._bus = bus
+        bus.subscribe(hub)
         self._consumers: dict[str, asyncio.Task] = {}
         self._warmups: list[asyncio.Task] = []
 
@@ -41,21 +59,47 @@ class StreamingService:
         if not self._settings.topics:
             errors.append("Aucun topic configure (config/topics.yaml)")
 
+        # Regles d'alerte : contenu invalide ou topic non consomme
+        errors.extend(self._settings.alerts.validate(self._settings.topics))
+
         return errors
+
+    def _replay_publisher(self, topic: str) -> Callable[[dict], Awaitable[None]]:
+        """Callback du prechauffage (fonction coroutine) : publie sur le bus
+        chaque record d'UN topic comme rejoue (replay=True). `topic` est fige
+        a la creation : pas de piege de liaison tardive sur la variable de
+        boucle de `start`."""
+        async def publish(record: dict) -> None:
+            await self._bus.publish(topic, record, replay=True)
+        return publish
+
+    def _live_publisher(self, topic: str,
+                        live_since_ms: int) -> Callable[[dict], Awaitable[None]]:
+        """Callback du consommateur d'UN topic : un record horodate avant
+        `live_since_ms` est un rattrapage, publie comme rejoue (replay=True) ;
+        les suivants sont du temps reel (replay=False)."""
+        async def publish(record: dict) -> None:
+            timestamp = record.get("timestamp_ms")
+            backlog = isinstance(timestamp, int) and timestamp < live_since_ms
+            await self._bus.publish(topic, record, replay=backlog)
+        return publish
 
     def start(self) -> None:
         """Lance une tache de consommation par topic (et le prechauffage
-        d'historique), chacune publiant vers le canal WebSocket de son topic."""
+        d'historique), chacune publiant les records de son topic sur le bus.
+        Le prechauffage publie comme rejoue (replay=True) ; le consommateur
+        aussi pour un record anterieur de plus de BACKLOG_GRACE_MS au
+        demarrage, puis en temps reel (replay=False)."""
+        # Limite du temps reel, figee au demarrage
+        live_since_ms = int(time.time() * 1000) - self.BACKLOG_GRACE_MS
         for topic_cfg in self._settings.topic_configs:
             topic = topic_cfg.name
-            publish = (lambda record, _topic=topic:
-                       self._hub.publish(_topic, record))
             if topic_cfg.warmup_messages > 0:
                 self._warmups.append(asyncio.create_task(
                     warmup_topic(
                         topic=topic,
                         consumer_config=self._settings.consumer_config(),
-                        publish=publish,
+                        publish=self._replay_publisher(topic),
                         tail_per_partition=topic_cfg.warmup_messages,
                     ),
                     name=f"warmup-{topic}",
@@ -65,7 +109,7 @@ class StreamingService:
                     topic=topic,
                     consumer_config=self._settings.consumer_config(topic),
                     output_dir=self._settings.output_dir,
-                    on_record=publish,
+                    on_record=self._live_publisher(topic, live_since_ms),
                 ),
                 name=f"consumer-{topic}",
             )
