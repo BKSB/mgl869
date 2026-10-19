@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-/** Ticker partage (module) : un seul setInterval pour tous les abonnes,
- * 5 s de resolution, en pause quand l'onglet est cache. */
+/** Un seul setInterval partage par tous les abonnes, en pause onglet cache. */
 
 const TICK_MS = 5000
 

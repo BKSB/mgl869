@@ -8,7 +8,6 @@ const OPTIONS: SegmentOption<ThemeMode>[] = [
   { value: 'dark', label: 'Sombre', icon: 'moon', iconOnly: true, title: 'Thème : sombre' },
 ]
 
-/** Bascule Systeme / Clair / Sombre (icones seules, libelles sr-only). */
 export function ThemeToggle({ mode, onChange }: { mode: ThemeMode; onChange: (m: ThemeMode) => void }) {
   return <SegmentedControl<ThemeMode> size="sm" ariaLabel="Thème" options={OPTIONS} value={mode} onChange={onChange} />
 }

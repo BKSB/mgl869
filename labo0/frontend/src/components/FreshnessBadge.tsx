@@ -17,12 +17,8 @@ const LEVELS: Record<Freshness, { icon: IconName; label: string; short: string }
   stale: { icon: 'x-circle', label: 'Muet', short: 'Muet' },
 }
 
-/** Fraicheur d'un capteur : icone coloree + libelle + age. Le texte reste en
- * encre secondaire. En mode compact, « À jour » passe en sr-only (l'icone
- * verte suffit) mais « Retard » / « Muet » restent visibles : l'icone ambre
- * n'atteint pas 3:1 sur fond clair et ne peut pas porter l'alerte seule. Les
- * espaces entre les spans gardent un texte accessible lisible (« À jour ·
- * il y a 5 s ») ; ils ne comptent pas dans la mise en page flex. */
+/** Compact : libelle en sr-only si frais seulement (l'icone ambre n'atteint pas
+ * 3:1 sur fond clair). Les {' '} gardent un texte accessible lisible. */
 export function FreshnessBadge({ lastT, period, now, compact = false }: Props) {
   if (lastT === undefined) return <span className="fresh">—</span>
   const level = freshness(now - lastT, period)

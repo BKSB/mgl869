@@ -11,8 +11,7 @@ interface Props {
   periodLabel: string
 }
 
-/** Variation sur la plage : la fleche seule porte la couleur de statut, le
- * texte reste en encre secondaire (contraste garanti dans les deux themes). */
+/** Couleur de statut sur la fleche seule : le texte garde son contraste dans les deux themes. */
 export function DeltaText({ delta, unit, decimals, polarity, periodLabel }: Props) {
   const stable = isStableDelta(delta, decimals)
   const icon: IconName = stable ? 'arrow-right' : delta > 0 ? 'arrow-up' : 'arrow-down'

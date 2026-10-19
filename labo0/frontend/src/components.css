@@ -1,6 +1,4 @@
-/* Styles des composants : app bar, onglets, controles, badges, tiles, carte,
- * graphe, tables, infobulle, etats vides. Rythme 4/8, hairlines, aucune
- * ombre lourde, aucune animation sur les donnees. */
+/* Hairlines, ombres legeres, aucune animation sur les donnees. */
 
 /* ---------- Icones ---------- */
 .icon {
@@ -186,8 +184,7 @@
 .tab[aria-selected="true"] {
   color: var(--text-primary);
 }
-/* Anneau interieur : la liste defile (overflow-x), un anneau exterieur y
- * serait rogne (bord gauche du premier onglet, haut et bas en mobile). */
+/* Anneau interieur : la liste defile (overflow-x) et rognerait un anneau exterieur */
 .tab:focus-visible {
   outline-offset: -2px;
 }
@@ -220,11 +217,10 @@
   gap: var(--sp-2) var(--sp-3);
   padding: var(--sp-3) 0;
 }
-/* Plage, capteurs, vue. Les pastilles ne se compriment jamais : le creneau
- * capteur prend la place libre et ses pastilles passent a la ligne si elles
- * n'y tiennent pas (nom complet toujours lisible, jamais « A… »). Entre 900 et
- * 1365 px, le creneau occupe sa propre rangee sous plage et vue (voir les
- * breakpoints) : la hauteur de la barre ne depend pas du topic. */
+/* Enveloppe data-focus-group sans boite : le groupe reste un element flex de la barre */
+.filterbar__range {
+  display: contents;
+}
 .filterbar__view {
   margin-left: auto;
   flex-shrink: 0;
@@ -239,10 +235,8 @@
   pointer-events: none;
 }
 
-/* Pills de capteur (>= 900 px) : taille naturelle, retour a la ligne plutot
- * que troncature ; l'ellipsis ne reste qu'un filet pour un nom isole tres long
- * (max-width 200 px, nom complet en title). Aucun overflow : le contour de
- * focus n'est jamais rogne. */
+/* Pastilles jamais comprimees : retour a la ligne, ellipsis en dernier recours.
+ * Pas d'overflow sur .chips : l'anneau de focus n'est jamais rogne. */
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -321,8 +315,7 @@
 .select:hover {
   border-color: var(--border-strong);
 }
-/* Rejeu : seul le creneau .filterbar__sensor--disabled attenue (.5) ; on
- * neutralise l'opacite que le navigateur ajoute au select desactive. */
+/* Annule l'opacite navigateur du select desactive : le creneau attenue deja (.5) */
 .select:disabled {
   opacity: 1;
   color: var(--text-primary);
@@ -338,9 +331,7 @@
 }
 
 /* ---------- Tiles par capteur ---------- */
-/* Nombre de colonnes (--cols) calcule par StatTileRow a partir de la largeur
- * mesuree : rangees equilibrees (6 capteurs -> 6, ou 3 + 3, jamais 5 + 1 ni
- * 4 + 2) et tiles d'au moins 200 px. */
+/* --cols calcule par StatTileRow (rangees equilibrees) */
 .tiles {
   display: grid;
   grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
@@ -369,9 +360,7 @@
   box-shadow: inset 0 0 0 1px var(--accent);
   background: var(--accent-wash);
 }
-/* Attenuation sur la partie graphique seulement (cle, sparkline) et valeur en
- * encre secondaire : nom, delta et unite gardent un contraste >= 4,5:1
- * (une opacite globale .6 les ferait tomber a 2,9:1). */
+/* Pas d'opacite globale (texte a 2,9:1) : seules cle et sparkline s'estompent */
 .tile--dimmed {
   background: transparent;
   box-shadow: none;
@@ -435,9 +424,7 @@
   min-width: 0;
   margin-top: auto;
 }
-/* Hauteur fixe de la sous-ligne (celle d'un delta 13 px) quel que soit son
- * contenu : tiles fantomes, « Aucune mesure » et tiles avec delta ont la meme
- * hauteur, la carte ne saute pas a l'arrivee des donnees. */
+/* Hauteur d'un delta quel que soit le contenu : pas de saut a l'arrivee des donnees */
 .tile__foot {
   display: flex;
   align-items: center;
@@ -464,9 +451,7 @@
   font-size: var(--fs-12);
   color: var(--text-secondary);
 }
-/* Boite de la sparkline : largeur souple (96 px au plus, 40 au moins) et
- * hauteur fixe ; Sparkline mesure cette boite et dessine en pixels (trait
- * 1,5 px et marqueur 8 px constants, jamais mis a l'echelle). */
+/* Mesuree par Sparkline, qui y dessine en pixels */
 .tile__spark {
   display: block;
   flex: 0 1 96px;
@@ -483,7 +468,6 @@
   overflow: visible;
 }
 
-/* Delta : seule l'icone porte la couleur de statut */
 .delta__icon {
   display: inline-flex;
   flex-shrink: 0;
@@ -563,8 +547,7 @@
   font-size: var(--fs-13);
   color: var(--text-secondary);
 }
-/* Chiffre heros sur sa propre ligne sous titre et sous-titre ; la mise a
- * jour reste en haut a droite, au niveau du titre. */
+/* order : heros sur sa propre ligne, la mise a jour reste au niveau du titre */
 .card__hero {
   order: 3;
   flex-basis: 100%;
@@ -606,10 +589,8 @@
   display: flex;
   flex-direction: column;
 }
-/* Rejeu / coupure : seules les courbes (et les valeurs du tableau, en encre
- * primaire : 5,2:1 a .6) sont attenuees. Ticks d'axe, anneau de focus,
- * legende, fraicheur et etats vides gardent un contraste plein : « Muet · il
- * y a 2 min » compte surtout pendant une coupure. */
+/* Rejeu / coupure : seules les donnees s'estompent (encre primaire a .6 : 5,2:1) ;
+ * le reste garde son contraste, la fraicheur compte surtout pendant une coupure. */
 .card[aria-busy="true"] .chart-area .recharts-line,
 .card--disconnected .chart-area .recharts-line,
 .card--disconnected .datatable td {
@@ -617,9 +598,7 @@
 }
 
 /* ---------- Graphe ---------- */
-/* Le conteneur Recharts est positionne en absolu : sa hauteur 100 % se
- * resout toujours contre .chart-area, meme quand celle-ci vient du flex
- * (verrou 100dvh) et non d'une hauteur explicite. */
+/* Conteneur Recharts en absolu : son 100 % se resout meme si la hauteur vient du flex */
 .chart-area {
   position: relative;
   width: 100%;
@@ -633,15 +612,13 @@
 .recharts-line path {
   transition: stroke-opacity var(--dur-fast) var(--ease);
 }
-/* Recharts 3 : l'element focalisable est le svg.recharts-surface (tabindex 0),
- * pas .recharts-wrapper. */
+/* Recharts 3 : le focalisable est svg.recharts-surface, pas .recharts-wrapper */
 .chart-area .recharts-surface:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 0;
   border-radius: var(--r-sm);
 }
 
-/* Infobulle : valeur d'abord, nom ensuite, cle-ligne */
 .tip {
   min-width: 160px;
   padding: 8px 10px;
@@ -710,13 +687,11 @@
 }
 .updated--fresh .updated__dot { background: var(--status-good); }
 .updated--late .updated__dot { background: var(--status-warning); }
-/* L'horloge signale le retard : encre secondaire (l'ambre n'a que 1,8:1 sur
- * fond clair) ; le point garde la couleur de statut. */
+/* Horloge en encre secondaire : l'ambre n'a que 1,8:1 sur fond clair */
 .updated--late .icon { color: var(--text-secondary); }
 
 /* ---------- Legende-tableau ---------- */
-/* padding-bottom : l'anneau de focus du bouton de la derniere ligne (cible de
- * 32 px = la ligne) n'est pas rogne par le defilement interne. */
+/* padding-bottom : overflow-x rognerait l'anneau de focus de la derniere ligne */
 .legend-wrap {
   margin-top: var(--sp-3);
   padding-bottom: var(--sp-1);
@@ -794,8 +769,7 @@
 .legend .col-fresh {
   padding-left: var(--sp-6);
 }
-/* Badge en bloc : centre verticalement par la cellule (en inline-flex, sa
- * ligne de base synthetique le remontait de ~2,5 px), meme corps que la ligne. */
+/* En bloc : en inline-flex, sa ligne de base synthetique le remontait de ~2,5 px */
 .legend .fresh {
   display: flex;
   font-size: var(--fs-13);
@@ -825,7 +799,6 @@
 }
 
 /* ---------- Vue tableau ---------- */
-/* Resume a gauche, export a droite : la rangee porte une information */
 .datatable__bar {
   display: flex;
   align-items: center;
@@ -871,10 +844,8 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
-/* table-layout: fixed : colonne horodatage fixe, colonnes de capteur de
- * largeur egale ; min-width (inline, --dt-time-w + 96 px par capteur) : sous
- * ce seuil le cadre defile au lieu d'ecraser les colonnes. En-tetes sur une
- * seule ligne (nom tronque, complet en title), jamais coupes dans un nom. */
+/* fixed : colonnes de capteur egales. min-width inline (--dt-time-w + 96 px par
+ * capteur) : en dessous, le cadre defile au lieu d'ecraser les colonnes. */
 .datatable__table {
   --dt-time-w: 120px;
   width: 100%;
@@ -907,7 +878,7 @@
 .datatable th .key {
   margin-right: 6px;
 }
-/* En-tete sur une ligne : nom tronque (complet en title), cle comprise */
+/* Une ligne, cle comprise (18 px = cle 12 + marge 6) */
 .datatable__name {
   display: inline-block;
   max-width: calc(100% - 18px);
@@ -973,14 +944,11 @@
 }
 
 /* ---------- Alertes ---------- */
-/* Couleur de statut sur les icones seulement : la forme (triangle,
- * octogone, coche) et un libelle (visible ou sr-only) l'accompagnent
- * toujours, le texte reste en encre primaire ou secondaire. */
+/* Couleur de statut sur les icones seulement, jamais sur le texte */
 .sev--warning { color: var(--status-warning); }
 .sev--critical { color: var(--status-critical); }
 .sev--good { color: var(--status-good); }
 
-/* Puce-bouton de l'app bar (anatomie des badges) et son panneau */
 .alerts {
   position: relative;
   display: inline-flex;
@@ -994,8 +962,7 @@
   border-color: var(--border-strong);
 }
 
-/* Panneau non modal ancre sous la puce (bord droit aligne sur elle), 4 px
- * sous l'app bar ; defilement interne, jamais de la page. */
+/* top : 4 px sous l'app bar, ou la puce est centree verticalement */
 .alerts-panel {
   position: absolute;
   top: calc(100% + (var(--appbar-h) - var(--control-h-sm)) / 2 + 4px);
@@ -1018,8 +985,7 @@
 .alerts-panel[hidden] {
   display: none;
 }
-/* Conteneur focalise par script a l'ouverture (nom du dialogue annonce) :
- * pas d'anneau autour de tout le panneau */
+/* Focalise par script a l'ouverture (nom annonce) : pas d'anneau sur tout le panneau */
 .alerts-panel:focus {
   outline: none;
 }
@@ -1078,7 +1044,6 @@
   margin-top: 1px;
 }
 
-/* Alerte active : icone | severite · lieu, message, topic · depuis | Voir */
 .alerts-list {
   list-style: none;
   margin: 0;
@@ -1131,7 +1096,6 @@
   font-size: var(--fs-12);
 }
 
-/* Evenements recents : plus compacts, temps a droite */
 .alerts-recent {
   padding: var(--sp-3) 0 var(--sp-2);
 }
@@ -1181,8 +1145,7 @@
 .event-row__msg {
   margin-top: 1px;
 }
-/* Lieu d'une alerte sur une seule ligne (« Salle A-3214 » jamais coupe au
- * tiret) */
+/* « Salle A-3214 » jamais coupe au tiret */
 .nowrap {
   white-space: nowrap;
 }
@@ -1193,7 +1156,6 @@
   white-space: nowrap;
 }
 
-/* Etat vide du panneau (aucune alerte, alertes desactivees) */
 .alerts-empty {
   display: flex;
   flex-direction: column;
@@ -1229,9 +1191,7 @@
   color: var(--text-secondary);
 }
 
-/* Capteur en alerte : icone de severite en fin de ligne de nom (tile) ou
- * apres le nom (legende), bordure 1 px couleur de statut sur la tile, sans
- * fond colore. Apres :hover et --hovered pour primer a specificite egale. */
+/* Capteur en alerte. Apres :hover et --hovered pour primer a specificite egale. */
 .tile__alert,
 .legend__alert {
   display: inline-flex;
@@ -1253,9 +1213,7 @@
 }
 
 /* ---------- Breakpoints ---------- */
-/* Pastilles (>= 900 px) sans place pour une rangee commune : le creneau
- * capteur passe sous plage et vue, en pleine largeur (la vue garde
- * margin-left: auto sur la premiere rangee). */
+/* Pastilles sur leur propre rangee : la hauteur de la barre ne depend pas du topic */
 @media (min-width: 900px) and (max-width: 1365px) {
   .filterbar__sensor {
     order: 3;
@@ -1263,8 +1221,7 @@
   }
 }
 
-/* Colonnes numeriques de largeur fixe : meme rythme d'un topic a l'autre, et
- * l'espace libre va au nom plutot qu'a un trou au milieu des donnees */
+/* Colonnes numeriques fixes : meme rythme d'un topic a l'autre, l'espace libre va au nom */
 @media (min-width: 1024px) {
   .legend th.num,
   .legend td.num {
@@ -1275,8 +1232,7 @@
 @media (max-width: 1023px) {
   .col-lg { display: none; }
   .legend__id { display: none; }
-  /* Premiere colonne elastique : le nom se tronque, les colonnes Derniere et
-   * Mis a jour restent entieres et visibles (aucun scroll interne). */
+  /* width 100 % + max-width 0 : le nom se tronque, les autres colonnes restent entieres */
   .legend th:first-child,
   .legend td:first-child {
     width: 100%;
@@ -1287,7 +1243,7 @@
 @media (max-width: 719px) {
   .appbar__sub { display: none; }
   .badge { padding: 0 6px; }
-  /* Libelle masque visuellement mais conserve (nom accessible, region live) */
+  /* sr-only, pas display: none : nom accessible et contenu de la region live */
   .badge__label {
     position: absolute;
     width: 1px;
@@ -1299,8 +1255,7 @@
     white-space: nowrap;
     border: 0;
   }
-  /* App bar : badges et piste du theme a la meme hauteur (36 px) ; boutons de
-   * theme 32 x 40 px, cible etendue a 40 x 40 par un pseudo-element. */
+  /* Badges et theme a 36 px ; boutons de theme 32 x 40, cible etendue a 40 x 40 (::before) */
   .appbar .badge {
     height: 36px;
     min-width: 36px;
@@ -1318,9 +1273,7 @@
     inset: -4px 0;
   }
 
-  /* Onglets : cible pleine hauteur de la liste (40 px). Libelle long masque
-   * visuellement seulement : il reste le nom accessible de l'onglet (et du
-   * tabpanel), l'abreviation est aria-hidden. */
+  /* Libelle long en sr-only : il reste le nom accessible de l'onglet et du tabpanel */
   .tabs__long {
     position: absolute;
     width: 1px;
@@ -1359,8 +1312,7 @@
     gap: var(--sp-2);
   }
   .tile { padding: 10px 12px; }
-  /* Nombre impair de tiles : la derniere occupe toute la rangee (pas
-   * d'orpheline a cote d'une case vide) */
+  /* Derniere tile impaire en pleine largeur : pas de case vide a cote */
   .tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .tile__id { display: none; }
   .tile__spark { height: 24px; }
@@ -1384,7 +1336,7 @@
     align-items: stretch;
     gap: var(--sp-1);
   }
-  /* Empilement mobile : titres, heros, mise a jour (ordre du DOM) */
+  /* Ordre du DOM : titres, heros, mise a jour */
   .card__hero {
     order: 0;
     flex-basis: auto;
@@ -1398,7 +1350,7 @@
   .chart-area { height: var(--chart-h-mobile); }
   .col-md { display: none; }
 
-  /* Legende : lignes et boutons de nom a 40 px (cible tactile) */
+  /* Cibles tactiles de 40 px */
   .legend th,
   .legend td { height: 40px; }
   .linkish { min-height: 40px; }
@@ -1416,8 +1368,7 @@
   .col-sm { display: none; }
 }
 
-/* Panneau des alertes sous 720 px : pleine largeur moins 2 x 16 px, sous
- * l'app bar collante ; cibles tactiles de 40 px */
+/* Panneau des alertes : fixe sous l'app bar, pleine largeur ; cibles de 40 px */
 @media (max-width: 719px) {
   .alerts-panel {
     position: fixed;
@@ -1439,14 +1390,10 @@
 }
 
 /* ---------- Verrou 100dvh (ecran mural) ----------
- * En fin de cascade : ces regles priment sur celles des composants (meme
- * specificite). La coquille garde min-height 100dvh (App.css) sans height ni
- * overflow : la carte remplit la hauteur libre et le graphe s'etire. Si le
- * contenu ne tient pas (graphe a son minimum), la page defile normalement :
- * jamais de defilement interne cache dans .shell, jamais de rognage. */
+ * En fin de cascade pour primer a specificite egale. Le graphe s'etire ; a son
+ * minimum, la page defile (jamais de defilement interne dans .shell). */
 @media (min-width: 1024px) and (min-height: 800px) {
-  /* Marges verticales resserrees (8 px) : une topic a 6 capteurs tient a
-   * 1440 x 900 avec un peu de jeu au-dessus du minimum du graphe */
+  /* Marges resserrees : 6 capteurs tiennent a 1440 x 900 */
   .shell {
     padding-bottom: var(--sp-2);
   }
@@ -1461,13 +1408,11 @@
     height: auto;
     min-height: 280px;
   }
-  /* Capteur isole : la ligne du chiffre heros (~60 px) est prise sur le
-   * minimum du graphe, pour qu'une topic a 6 capteurs tienne a 1440 x 900 */
+  /* Chiffre heros (~60 px) pris sur le minimum du graphe */
   .card--with-hero .chart-area {
     min-height: 220px;
   }
-  /* Coupure : le bandeau (32 px) est pris sur le minimum du graphe, la page
-   * ne defile pas a 1440 x 900 */
+  /* Bandeau de coupure (32 px) pris sur le minimum du graphe */
   .card--disconnected .chart-area {
     min-height: 248px;
   }
@@ -1477,8 +1422,7 @@
   .legend-wrap {
     flex: 0 0 auto;
   }
-  /* contain: size : les 300 lignes ne gonflent pas la carte, le tableau
-   * remplit la hauteur libre et defile en interne (son propre cadre) */
+  /* contain: size : les lignes ne gonflent pas la carte, le tableau defile en interne */
   .datatable {
     max-height: none;
     min-height: 240px;

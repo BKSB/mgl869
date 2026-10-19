@@ -1,11 +1,7 @@
-/** Graduations « propres » des axes (sans React). Recharts 3 avec
- * scale="time" place ses ticks sur les horodatages des donnees et, sur un
- * domaine etroit, ses ticks Y tombent entre deux pas de 10^-decimals : les
- * echelles sont calculees ici a la main. */
+/** Graduations calculees a la main : Recharts 3 (scale="time") cale ses ticks X sur les
+ * donnees et, sur un domaine etroit, ses ticks Y tombent entre deux pas de 10^-decimals. */
 
-const MINUTE = 60_000
-const HOUR = 60 * MINUTE
-const DAY = 24 * HOUR
+import { DAY, HOUR, MINUTE } from './time'
 
 /** Pas calendaires candidats, du plus fin au plus large. */
 const X_STEPS = [
@@ -13,11 +9,9 @@ const X_STEPS = [
   1 * HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY,
 ]
 
-/** Mantisses admises pour l'axe Y (x 10^k). */
 const Y_MANTISSAS = [1, 2, 2.5, 5, 10]
-/** Pas Y minimal relatif a la grandeur des valeurs (2^-40, ~4 000 ulp) :
- * au-dela d'environ 2^50, un pas de 10^-decimals serait absorbe par
- * l'arrondi flottant (hi + pas === hi) et le domaine ne grandirait plus. */
+/** Plancher du pas relatif a la grandeur (~4000 ulp) : au-dela de ~2^50, un pas de
+ * 10^-decimals serait absorbe (hi + pas === hi) et le domaine ne grandirait plus. */
 const Y_MIN_RELATIVE_STEP = 2 ** -40
 /** Garde des boucles d'elargissement : la cible est de quelques pas. */
 const Y_MAX_WIDEN = 1000
@@ -32,16 +26,10 @@ export interface YLadder {
 
 const roundTo = (v: number, decimals: number) => Number(v.toFixed(decimals))
 
-/**
- * Echelle Y : pas = plus petit {1, 2, 2,5, 5} x 10^k >= etendue / target et
- * >= 10^-decimals (jamais plus fin que la precision du topic, donc jamais
- * deux libelles identiques) ; 2,5 x 10^k est ecarte s'il demande plus de
- * decimales que le topic. Bornes arrondies au pas, au moins `target` pas
- * (etendue nulle comprise). Un domaine entierement positif ne descend pas
- * sous zero. Le pas reste representable quelle que soit la grandeur des
- * valeurs (capteur bloque sur une sentinelle, ex. 3,4e38) : l'elargissement
- * termine toujours.
- */
+/** Pas = plus petit {1, 2, 2,5, 5} x 10^k >= etendue / target et >= 10^-decimals
+ * (jamais deux libelles identiques) ; 2,5 ecarte s'il exige plus de decimales que
+ * le topic. Au moins `target` pas (etendue nulle comprise), jamais sous zero si tout
+ * est positif ; termine meme sur une sentinelle (capteur bloque a 3,4e38). */
 export function yLadder(min: number, max: number, decimals: number, target = 4): YLadder {
   const finite = Number.isFinite(min) && Number.isFinite(max)
   const vMin = finite ? min : 0
@@ -76,14 +64,10 @@ export function yLadder(min: number, max: number, decimals: number, target = 4):
   return { domain: [ticks[0], ticks[n]], ticks, decimals: stepDecimals }
 }
 
-/**
- * Graduations X alignees sur l'horloge locale : plus petit pas de X_STEPS
- * donnant au plus `maxTicks` ticks (au-dela de 24 h, multiples de jours).
- * Les pas < 1 h s'alignent sur les multiples de l'epoque (equivalent a
- * l'heure locale pour tout fuseau a la demi-heure) ; les pas >= 1 h partent
- * du minuit local et avancent par Date (heure d'ete comprise). Seuls les
- * ticks dans [t0, t1] sont renvoyes : Recharts ne filtre pas sur le domaine.
- */
+/** Ticks alignes sur l'heure locale : plus petit pas de X_STEPS donnant au plus
+ * `maxTicks` ticks, sinon multiples de jours. Pas < 1 h : multiples de l'epoque
+ * (exact pour tout fuseau a la demi-heure) ; sinon depuis minuit local via Date
+ * (heure d'ete comprise). Hors [t0, t1] exclus : Recharts ne filtre pas sur le domaine. */
 export function xTicks(t0: number, t1: number, maxTicks = 10): number[] {
   const span = t1 - t0
   if (!(span > 0)) return []

@@ -1,7 +1,6 @@
 /** Formateurs fr-CA (virgule decimale, espace fine), mis en cache. */
 
-/** Espace fine insecable (U+202F) entre valeur et unite ; echappement explicite
- * pour qu'un editeur ou un formateur ne la normalise pas en espace simple. */
+/** U+202F en echappement explicite : un editeur pourrait la normaliser en espace simple. */
 const THIN = '\u202F'
 const MINUS = '\u2212'
 
@@ -24,8 +23,7 @@ function numberFormat(decimals: number, signed: boolean): Intl.NumberFormat {
 /** Vrai signe moins (U+2212) quel que soit le moteur ICU. */
 const withMinus = (s: string) => s.replace(/^-/, MINUS)
 
-/** Valeur qui s'arrondit a zero (y compris -0) : ramenee a 0 avant formatage,
- * sinon Intl conserve le signe (« −0,0 °C »). */
+/** Vrai aussi pour -0. A formater comme 0, sinon Intl garde le signe (« −0,0 °C »). */
 export const roundsToZero = (v: number, decimals: number) => Math.abs(v) < 0.5 * 10 ** -decimals
 
 /** « 22,4 °C », « 1 042 ppm » ; unite vide → valeur seule. */
@@ -45,8 +43,7 @@ export function isStableDelta(delta: number, decimals: number): boolean {
   return roundsToZero(delta, decimals)
 }
 
-/** Texte complet d'une variation (« stable » ou « +0,3 °C sur 15 min ») :
- * meme seuil que DeltaText, pour les aria-label. */
+/** « stable » ou « +0,3 °C sur 15 min » ; meme seuil que DeltaText (aria-label). */
 export function deltaLabel(delta: number, decimals: number, unit: string, periodLabel: string): string {
   return isStableDelta(delta, decimals) ? 'stable' : `${fmtDelta(delta, decimals, unit)} ${periodLabel}`
 }
@@ -68,8 +65,7 @@ export function fmtDateTime(t: number): string {
 
 const MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
 
-/** « 03 oct. 03:00 » (ou « 03 oct. 03:00:02 ») : jour + heure, quand
- * l'historique affiche couvre plus de 24 h (l'heure seule serait ambigue). */
+/** « 03 oct. 03:00 » : au-dela de 24 h d'historique, l'heure seule serait ambigue. */
 export function fmtDayTime(t: number, withSeconds = false): string {
   const d = new Date(t)
   return `${pad2(d.getDate())} ${MONTHS[d.getMonth()]} ${fmtTime(t, withSeconds)}`
@@ -103,4 +99,9 @@ const countFormat = new Intl.NumberFormat('fr-CA', { maximumFractionDigits: 0 })
 /** Entier avec separateur de milliers : « 1 842 ». */
 export function fmtCount(n: number): string {
   return countFormat.format(n)
+}
+
+/** « 0 alerte », « 1 842 points » ; `pluralForm` si irregulier ou de plusieurs mots. */
+export function plural(n: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${fmtCount(n)} ${n > 1 ? pluralForm : singular}`
 }

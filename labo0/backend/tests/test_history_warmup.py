@@ -1,6 +1,3 @@
-"""Tests du prechauffage d'historique (relecture de la fin des partitions)
-avec un faux AIOKafkaConsumer."""
-
 import asyncio
 
 import pytest
@@ -10,14 +7,12 @@ from app.data_management.data_acquisition.history_warmup import (
     _read_tail,
     warmup_topic,
 )
-from tests.conftest import Collecteur, make_msg
+from tests.conftest import Collector, make_msg
 
 
 class FakeConsumer:
-    """Imite l'API AIOKafkaConsumer utilisee par le prechauffage.
-
-    `log` : partition -> liste de (offset) disponibles entre `begin` et `end`.
-    getmany() renvoie les messages a partir de la position fixee par seek()."""
+    """Offsets [begins[p], ends[p]) par partition ; getmany() lit depuis la
+    position de seek(), par lots de `batch_size`."""
 
     def __init__(self, topic="t", partitions=None, begins=None, ends=None,
                  start_error=None, batch_size=500):
@@ -63,10 +58,10 @@ class FakeConsumer:
 
 
 class TestReadTail:
-    async def test_relit_les_n_derniers_messages_par_partition(self):
+    async def test_rereads_last_n_messages_per_partition(self):
         consumer = FakeConsumer(partitions={0, 1},
                                 begins={0: 0, 1: 0}, ends={0: 10, 1: 3})
-        published = Collecteur()
+        published = Collector()
 
         await _read_tail(consumer, "t", published, tail_per_partition=4)
 
@@ -76,56 +71,54 @@ class TestReadTail:
         # Partition plus courte que N : bornee par le debut
         assert by_partition[1] == [0, 1, 2]
 
-    async def test_borne_par_le_debut_de_retention(self):
+    async def test_bounded_by_retention_start(self):
         consumer = FakeConsumer(begins={0: 8}, ends={0: 10})
-        published = Collecteur()
+        published = Collector()
 
         await _read_tail(consumer, "t", published, tail_per_partition=100)
 
         assert consumer.positions[0] == 10
         assert [r["offset"] for r in published.records] == [8, 9]
 
-    async def test_lecture_en_plusieurs_lots(self):
+    async def test_reads_in_batches(self):
         consumer = FakeConsumer(ends={0: 10}, batch_size=3)
-        published = Collecteur()
+        published = Collector()
 
         await _read_tail(consumer, "t", published, tail_per_partition=10)
 
         assert [r["offset"] for r in published.records] == list(range(10))
 
-    async def test_publication_attendue_avant_le_message_suivant(self):
-        """`publish` est une coroutine attendue : chaque record est traite
-        jusqu'au bout (meme si l'observateur suspend) avant le suivant."""
+    async def test_publish_awaited_before_next_message(self):
         consumer = FakeConsumer(ends={0: 3})
         journal = []
 
-        async def publish_lent(record):
+        async def slow_publish(record):
             journal.append(("debut", record["offset"]))
             await asyncio.sleep(0)
             journal.append(("fin", record["offset"]))
 
-        await _read_tail(consumer, "t", publish_lent, tail_per_partition=10)
+        await _read_tail(consumer, "t", slow_publish, tail_per_partition=10)
 
         assert journal == [("debut", 0), ("fin", 0), ("debut", 1), ("fin", 1),
                            ("debut", 2), ("fin", 2)]
 
-    async def test_topic_vide(self):
+    async def test_empty_topic(self):
         consumer = FakeConsumer(begins={0: 5}, ends={0: 5})
-        published = Collecteur()
+        published = Collector()
 
         await _read_tail(consumer, "t", published, tail_per_partition=10)
 
         assert published.records == []
 
-    async def test_aucune_partition_assignee(self):
+    async def test_no_partition_assigned(self):
         consumer = FakeConsumer(partitions=set())
-        published = Collecteur()
+        published = Collector()
 
         await _read_tail(consumer, "t", published, tail_per_partition=10)
 
         assert published.records == []
 
-    async def test_abandon_apres_timeout(self, monkeypatch):
+    async def test_gives_up_after_timeout(self, monkeypatch):
         monkeypatch.setattr(history_warmup, "TIMEOUT_S", 0.05)
 
         class NeverEnding(FakeConsumer):
@@ -136,7 +129,7 @@ class TestReadTail:
         consumer = NeverEnding(ends={0: 10})
 
         await asyncio.wait_for(
-            _read_tail(consumer, "t", Collecteur(), tail_per_partition=10),
+            _read_tail(consumer, "t", Collector(), tail_per_partition=10),
             timeout=2)
 
 
@@ -149,40 +142,39 @@ class TestWarmupTopic:
             return consumer
         return _install
 
-    async def test_publie_et_ferme_le_consommateur(self, install):
+    async def test_publishes_and_closes_consumer(self, install):
         consumer = install(FakeConsumer(ends={0: 2}))
-        published = Collecteur()
+        published = Collector()
 
         await warmup_topic("t", {}, published, tail_per_partition=10)
 
         assert [r["offset"] for r in published.records] == [0, 1]
         assert consumer.stopped
 
-    async def test_erreur_journalisee_sans_propagation(self, install, caplog):
+    async def test_error_logged_not_propagated(self, install, caplog):
         consumer = install(FakeConsumer(start_error=ConnectionError("broker KO")))
 
-        await warmup_topic("t", {}, Collecteur(), tail_per_partition=10)
+        await warmup_topic("t", {}, Collector(), tail_per_partition=10)
 
         assert consumer.stopped
         assert "echec du prechauffage" in caplog.text
 
-    async def test_annulation_propagee(self, install):
+    async def test_cancellation_propagated(self, install):
         consumer = install(FakeConsumer(start_error=asyncio.CancelledError()))
 
         with pytest.raises(asyncio.CancelledError):
-            await warmup_topic("t", {}, Collecteur(), tail_per_partition=10)
+            await warmup_topic("t", {}, Collector(), tail_per_partition=10)
 
         assert consumer.stopped
 
-    async def test_annulation_pendant_la_publication_propagee(self, install):
-        """Arret du service pendant que le bus notifie ses observateurs :
-        l'annulation n'est pas confondue avec un echec du prechauffage."""
+    async def test_cancellation_during_publish_propagated(self, install):
+        """Pas confondue avec un echec du prechauffage, qui est avale."""
         consumer = install(FakeConsumer(ends={0: 2}))
 
-        async def publish_annule(_record):
+        async def cancelled_publish(_record):
             raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await warmup_topic("t", {}, publish_annule, tail_per_partition=10)
+            await warmup_topic("t", {}, cancelled_publish, tail_per_partition=10)
 
         assert consumer.stopped

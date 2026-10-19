@@ -1,6 +1,5 @@
-"""Tests de la couche API (HTTP + WebSocket) via le TestClient FastAPI,
-avec un vrai StreamingService dont les taches Kafka sont simulees et un
-vrai AlertService, assembles comme dans main() (create_bus)."""
+"""Vrais StreamingService et AlertService assembles comme main() (create_bus),
+taches Kafka simulees."""
 
 import asyncio
 from functools import partial
@@ -21,7 +20,7 @@ from app.main import create_app, create_bus
 from app.services import streaming_service
 from app.services.alert_service import AlertService
 from app.services.streaming_service import StreamingService
-from tests.conftest import make_mesure, make_record
+from tests.conftest import make_measurement, make_record
 
 
 @pytest.fixture
@@ -64,18 +63,16 @@ def client(make_client, alerts):
         yield test_client
 
 
-def publier_mesure(client: TestClient, valeur, ts, offset) -> None:
-    """Publie une mesure temps reel sur le bus de l'application DANS la
-    boucle du serveur (comme le consommateur), pour que les abonnes
-    WebSocket soient reveilles."""
-    record = make_mesure(valeur, timestamp_ms=ts, offset=offset,
-                         topic="topic.a")
+def publish_measurement(client: TestClient, valeur, ts, offset) -> None:
+    """Publie en temps reel DANS la boucle du serveur, comme le consommateur :
+    sinon les abonnes WebSocket ne sont pas reveilles."""
+    record = make_measurement(valeur, timestamp_ms=ts, offset=offset,
+                              topic="topic.a")
     client.portal.call(partial(client.bus.publish, "topic.a", record))
 
 
-def attendre_desabonnement(client: TestClient, abonnes: set) -> None:
-    """La deconnexion est traitee de facon asynchrone par le serveur : des
-    requetes HTTP suivantes laissent au handler le temps de finir."""
+def wait_for_unsubscribe(client: TestClient, abonnes: set) -> None:
+    """Deconnexion traitee en asynchrone : laisse le handler finir."""
     for _ in range(50):
         client.get("/health")
         if not abonnes:
@@ -91,7 +88,7 @@ def test_health(client):
     }
 
 
-def test_liste_des_topics(client):
+def test_list_topics(client):
     response = client.get("/api/topics")
     assert response.status_code == 200
     assert response.json() == {"topics": [
@@ -100,7 +97,7 @@ def test_liste_des_topics(client):
     ]}
 
 
-def test_websocket_topic_inconnu_ferme_avec_4004(client):
+def test_websocket_unknown_topic_closes_with_4004(client):
     with client.websocket_connect("/ws/inconnu") as ws:
         with pytest.raises(WebSocketDisconnect) as exc:
             ws.receive_json()
@@ -108,7 +105,7 @@ def test_websocket_topic_inconnu_ferme_avec_4004(client):
     assert "inconnu" in exc.value.reason
 
 
-def test_websocket_rejoue_l_historique(client, hub):
+def test_websocket_replays_history(client, hub):
     hub.publish("topic.a", make_record("n1", offset=1, timestamp_ms=200))
     hub.publish("topic.a", make_record("n2", offset=2, timestamp_ms=100))
     hub.publish("topic.b", make_record("n3", offset=3, timestamp_ms=50))
@@ -121,9 +118,9 @@ def test_websocket_rejoue_l_historique(client, hub):
     assert [first["sensor_id"], second["sensor_id"]] == ["n2", "n1"]
 
 
-class TestAlertes:
-    def test_get_alertes(self, client):
-        publier_mesure(client, 1120, ts=100, offset=1)
+class TestAlerts:
+    def test_get_alerts(self, client):
+        publish_measurement(client, 1120, ts=100, offset=1)
 
         response = client.get("/api/alerts")
 
@@ -142,7 +139,7 @@ class TestAlertes:
              "threshold": 1500.0, "hysteresis": 50.0},
         ]}
 
-    def test_get_alertes_desactivees(self, make_client):
+    def test_get_alerts_disabled(self, make_client):
         with make_client(AlertService(AlertsConfig())) as client:
             response = client.get("/api/alerts")
 
@@ -150,15 +147,15 @@ class TestAlertes:
         assert response.json() == {"enabled": False, "active": [],
                                    "recent": [], "rules": {}}
 
-    def test_websocket_snapshot_puis_evenements(self, client):
-        publier_mesure(client, 1120, ts=100, offset=1)
+    def test_websocket_snapshot_then_events(self, client):
+        publish_measurement(client, 1120, ts=100, offset=1)
 
         # /ws/alerts n'est pas capture par /ws/{topic} (pas de fermeture 4004)
         with client.websocket_connect("/ws/alerts") as ws:
             snapshot = ws.receive_json()
-            publier_mesure(client, 1600, ts=200, offset=2)
+            publish_measurement(client, 1600, ts=200, offset=2)
             escalade = ws.receive_json()
-            publier_mesure(client, 900, ts=300, offset=3)
+            publish_measurement(client, 900, ts=300, offset=3)
             resolution = ws.receive_json()
 
         assert snapshot["type"] == "snapshot"
@@ -170,35 +167,30 @@ class TestAlertes:
         assert resolution["event"]["kind"] == "resolved"
         assert resolution["event"]["alert"]["value"] == 900
 
-    def test_websocket_desactive_snapshot_vide_et_reste_ouvert(self,
-                                                               make_client):
+    def test_websocket_disabled_empty_snapshot_stays_open(self,
+                                                          make_client):
         alerts = AlertService(AlertsConfig())
         with make_client(alerts) as client:
             with client.websocket_connect("/ws/alerts") as ws:
                 assert ws.receive_json() == {"type": "snapshot", "active": []}
-                # Connexion toujours ouverte : un message du client (ignore)
-                # est accepte et le service compte toujours l'abonne
+                # Reste ouverte : message ignore, abonne toujours compte
                 ws.send_text("ping")
                 client.get("/health")
                 assert len(alerts._subscribers) == 1
-            attendre_desabonnement(client, alerts._subscribers)
+            wait_for_unsubscribe(client, alerts._subscribers)
 
         assert not alerts._subscribers
 
-    def test_websocket_desabonne_a_la_deconnexion(self, client, alerts):
+    def test_websocket_unsubscribes_on_disconnect(self, client, alerts):
         with client.websocket_connect("/ws/alerts") as ws:
             ws.receive_json()
-        attendre_desabonnement(client, alerts._subscribers)
+        wait_for_unsubscribe(client, alerts._subscribers)
         assert not alerts._subscribers
 
 
-def test_websocket_desabonne_a_la_deconnexion(client, hub):
+def test_websocket_unsubscribes_on_disconnect(client, hub):
     with client.websocket_connect("/ws/topic.a"):
         pass
-    # La deconnexion est traitee de facon asynchrone par le serveur :
-    # une requete HTTP suivante garantit que le handler a eu le temps de finir
-    for _ in range(50):
-        client.get("/health")
-        if not hub._subscribers.get("topic.a"):
-            break
-    assert not hub._subscribers.get("topic.a")
+    abonnes = hub._subscribers.get("topic.a", set())
+    wait_for_unsubscribe(client, abonnes)
+    assert not abonnes

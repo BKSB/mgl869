@@ -8,21 +8,17 @@ import type { HealthState } from '../hooks/useHealth'
 import type { Alert, ConnectionStatus, HealthInfo, ThemeMode, TopicInfo } from '../types'
 
 interface Props {
-  /** Etat du flux du topic actif ; null = aucun flux a ecouter (liste de
-   * topics vide ou en erreur) : le badge n'est pas rendu. */
+  /** null : aucun flux (liste de topics vide ou en erreur), pas de badge. */
   status: ConnectionStatus | null
   health: HealthInfo | null
   healthState: HealthState
   topics: TopicInfo[]
   alerts: AlertsApi
-  /** « Voir » d'une alerte : topic selectionne, capteur isole. */
   onShowAlert: (alert: Alert) => void
   theme: ThemeMode
   onTheme: (m: ThemeMode) => void
 }
 
-/** Barre d'application opaque et collante : marque, etat du flux, sante,
- * alertes, bascule de theme. Aucun flou, aucun color-mix. */
 export function AppBar({ status, health, healthState, topics, alerts, onShowAlert, theme, onTheme }: Props) {
   return (
     <header className="appbar">

@@ -4,17 +4,12 @@ import type { HealthInfo } from '../types'
 
 export type HealthState = 'pending' | 'ok' | 'degraded' | 'unreachable'
 
-/** Requete sans reponse apres ce delai (moitie de l'intervalle au plus) :
- * comptee comme un echec. Un backend fige accepte la connexion sans jamais
- * repondre, et nginx attend 60 s avant d'abandonner. */
+/** Sans reponse dans ce delai (borne a intervalle / 2) : echec. Un backend fige
+ * accepte la connexion sans repondre, et nginx attend 60 s avant d'abandonner. */
 const REQUEST_TIMEOUT_MS = 10_000
 
-/**
- * Polling de GET /health (30 s par defaut), en pause quand l'onglet est cache.
- * La derniere reponse connue est conservee en cas d'echec ; « injoignable »
- * n'apparait qu'apres deux echecs consecutifs (erreur, ou pas de reponse dans
- * le delai). Ne bloque jamais le rendu.
- */
+/** Polling de GET /health, en pause onglet cache. Derniere reponse gardee en cas
+ * d'echec ; « unreachable » seulement apres deux echecs consecutifs. */
 export function useHealth(intervalMs = 30_000): {
   health: HealthInfo | null
   state: HealthState
@@ -45,8 +40,7 @@ export function useHealth(intervalMs = 30_000): {
         setHealth(body)
         setState(body.status === 'ok' ? 'ok' : 'degraded')
       } catch {
-        // Annulee par le poll suivant ou le demontage : rien a compter ;
-        // delai depasse : un echec comme un autre
+        // Annulee (poll suivant, demontage) : rien a compter ; delai depasse : echec
         if (disposed || (current.signal.aborted && !timedOut)) return
         failures += 1
         if (failures >= 2) setState('unreachable')
@@ -66,8 +60,7 @@ export function useHealth(intervalMs = 30_000): {
       else { void poll(); start() }
     }
 
-    // Onglet deja cache au montage : rien ne part avant le premier retour au
-    // premier plan (onVisibility fait alors poll() puis start()).
+    // Onglet cache au montage : premier poll au retour au premier plan (onVisibility)
     if (!document.hidden) {
       void poll()
       start()

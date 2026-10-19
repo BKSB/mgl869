@@ -9,8 +9,7 @@ interface Handlers {
   onEscape: () => void
 }
 
-/** Raccourcis globaux, ignores dans les champs de saisie et avec modificateur.
- * Un seul ecouteur ; les handlers passent par une ref. */
+/** Raccourcis globaux hors champs de saisie et sans modificateur ; handlers lus via une ref. */
 export function useKeyboardShortcuts(handlers: Handlers): void {
   const ref = useRef(handlers)
   useEffect(() => {

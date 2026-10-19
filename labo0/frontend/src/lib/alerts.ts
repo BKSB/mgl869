@@ -1,14 +1,11 @@
-/** Logique pure des alertes (sans React ni reseau) : tri, application d'un
- * evenement, severite dominante et libelles. */
+/** Logique pure des alertes (sans React ni reseau). */
 
 import type { Alert, AlertEvent, AlertEventKind, AlertSeverity } from '../types'
 import { fmtValue } from './format'
-import { topicLabel } from './labels'
-import { getTopicMeta } from './metrics'
+import { getTopicMeta, topicLabel } from './metrics'
 
 export const SEVERITY_RANK: Record<AlertSeverity, number> = { warning: 1, critical: 2 }
 
-/** Libelle visible de la severite (panneau). */
 export const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   warning: 'Avertissement',
   critical: 'Critique',
@@ -20,7 +17,6 @@ export const SEVERITY_SR: Record<AlertSeverity, string> = {
   critical: 'Alerte critique',
 }
 
-/** Libelle d'un evenement (section « Récemment »). */
 export function eventLabel(kind: AlertEventKind, severity: AlertSeverity): string {
   switch (kind) {
     case 'raised': return severity === 'critical' ? 'Déclenchée (critique)' : 'Déclenchée (avertissement)'
@@ -30,34 +26,24 @@ export function eventLabel(kind: AlertEventKind, severity: AlertSeverity): strin
   }
 }
 
-/** Seuil d'une regle : entier sans decimale (« 1 000 ppm », « 18 °C »),
- * sinon avec les decimales du topic (« 17,5 °C »). */
+/** Entier sans decimale (« 1 000 ppm »), sinon aux decimales du topic (« 17,5 °C »). */
 export function fmtThreshold(threshold: number, decimals: number, unit: string): string {
   return fmtValue(threshold, Number.isInteger(threshold) ? 0 : decimals, unit)
 }
 
-/** Decimales ajoutees au plus pour distinguer une valeur d'une limite. */
 const EXTRA_DECIMALS = 3
 
-/** Valeur mesuree aux decimales du topic, avec jusqu'a 3 decimales de plus
- * quand l'arrondi la confondrait avec une limite (seuil, fin de bande)
- * qu'elle ne vaut pas : 26,04 au-dessus de 26 s'ecrit « 26,04 °C », pas
- * « 26,0 °C ». */
+/** Jusqu'a EXTRA_DECIMALS decimales de plus si l'arrondi confondrait la valeur
+ * avec une limite qu'elle ne vaut pas : « 26,04 °C » au-dessus de 26, pas « 26,0 °C ». */
 function fmtMeasured(value: number, decimals: number, unit: string, ...limits: number[]): string {
   let d = decimals
   while (d < decimals + EXTRA_DECIMALS && limits.some((l) => l !== value && fmtValue(l, d) === fmtValue(value, d))) d += 1
   return fmtValue(value, d, unit)
 }
 
-/**
- * Texte d'une alerte active, compose a partir des champs structures avec les
- * libelles et les decimales du dashboard, comme les tiles (le `message` du
- * backend sert aux journaux et aux autres clients de l'API). Au-dela du
- * seuil : « CO₂ au-dessus de 1 000 ppm (1 120 ppm) ». Maintenue par
- * l'hysteresis : « CO₂ à 960 ppm (seuil 1 000 ppm), alerte maintenue
- * jusqu’à 950 ppm » (« niveau critique maintenu » pour une alerte critique,
- * qui redescend en avertissement en sortant de sa bande).
- */
+/** « CO₂ au-dessus de 1 000 ppm (1 120 ppm) » ; maintenue par l'hysteresis :
+ * « CO₂ à 960 ppm (seuil 1 000 ppm), alerte maintenue jusqu’à 950 ppm », ou
+ * « niveau critique maintenu » (une critique redescend en avertissement). */
 export function alertText(a: Alert): string {
   const { decimals } = getTopicMeta(a.topic)
   const label = topicLabel(a.topic)
@@ -73,10 +59,7 @@ export function alertText(a: Alert): string {
   return `${label} à ${value} (seuil ${threshold}), ${held} jusqu’à ${fmtThreshold(release, decimals, a.unit)}`
 }
 
-/** Texte d'un evenement « resolved ». Le contrat garde dans `alert` l'etat
- * juste avant la resolution : seules la valeur et l'heure sont celles de la
- * mesure qui resout. Le retour a la normale est donc compose ici, ex.
- * « CO₂ de nouveau sous 1 000 ppm (940 ppm) ». */
+/** « resolved » (cf. AlertEvent) : « CO₂ de nouveau sous 1 000 ppm (940 ppm) ». */
 export function resolutionText(a: Alert): string {
   const { decimals } = getTopicMeta(a.topic)
   const where = a.direction === 'above' ? 'sous' : 'au-dessus de'
@@ -84,12 +67,10 @@ export function resolutionText(a: Alert): string {
   return `${topicLabel(a.topic)} de nouveau ${where} ${fmtThreshold(a.threshold, decimals, a.unit)} (${value})`
 }
 
-/** Texte d'un evenement (« Récemment », annonces) : texte de l'alerte, ou
- * retour a la normale pour « resolved ». */
 export const eventText = (e: AlertEvent): string =>
   e.kind === 'resolved' ? resolutionText(e.alert) : alertText(e.alert)
 
-/** Ordre du contrat : critical d'abord, puis la plus ancienne, puis l'id. */
+/** Ordre du contrat (AlertsSnapshot.active), puis l'id. */
 export function compareAlerts(a: Alert, b: Alert): number {
   return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]
     || a.since_ms - b.since_ms
@@ -100,19 +81,16 @@ export function sortAlerts(alerts: Alert[]): Alert[] {
   return [...alerts].sort(compareAlerts)
 }
 
-/** Alertes actives apres un evenement : « resolved » retire l'alerte, les
- * autres la remplacent (ou l'ajoutent). Tableau neuf, toujours trie. */
+/** Tableau neuf, toujours trie. */
 export function applyEvent(active: Alert[], event: AlertEvent): Alert[] {
   const rest = active.filter((a) => a.id !== event.alert.id)
   if (event.kind === 'resolved') return rest
   return sortAlerts([...rest, event.alert])
 }
 
-/** Cle d'identite d'un evenement : un evenement deja connu (GET puis flux)
- * n'est pas ajoute deux fois aux recents. */
+/** Dedoublonne les recents : un meme evenement peut venir du GET puis du flux. */
 export const eventKey = (e: AlertEvent): string => `${e.kind}|${e.at_ms}|${e.alert.id}`
 
-/** Severite la plus haute d'une liste, ou null si elle est vide. */
 export function highestSeverity(alerts: readonly Alert[]): AlertSeverity | null {
   let best: AlertSeverity | null = null
   for (const a of alerts) {
@@ -122,10 +100,6 @@ export function highestSeverity(alerts: readonly Alert[]): AlertSeverity | null 
   return best
 }
 
-/** « 1 alerte », « 3 alertes ». */
-export const alertCount = (n: number): string => `${n} alerte${n > 1 ? 's' : ''}`
-
-/** Lieu lisible d'une alerte : emplacement, sinon identifiant du capteur. */
 export const alertPlace = (a: Alert): string => a.location || a.node_id
 
 /** Phrase annoncee aux lecteurs d'ecran a l'arrivee d'un evenement. */

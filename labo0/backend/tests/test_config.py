@@ -1,6 +1,3 @@
-"""Tests de la configuration : chargement des topics et des regles
-d'alerte depuis les YAML, et parametres du consommateur Kafka."""
-
 import logging
 
 import pytest
@@ -26,11 +23,11 @@ from app.data_management.data_processing.alert_rules import (
 
 
 class TestEnv:
-    def test_valeur_definie(self, monkeypatch):
+    def test_defined_value(self, monkeypatch):
         monkeypatch.setenv("GRIDD_TEST_VAR", "x")
         assert _env("GRIDD_TEST_VAR", "defaut") == "x"
 
-    def test_absente_ou_vide(self, monkeypatch):
+    def test_missing_or_empty(self, monkeypatch):
         monkeypatch.delenv("GRIDD_TEST_VAR", raising=False)
         assert _env("GRIDD_TEST_VAR", "defaut") == "defaut"
         monkeypatch.setenv("GRIDD_TEST_VAR", "")
@@ -43,7 +40,7 @@ class TestLoadTopicConfigs:
         path.write_text(content, encoding="utf-8")
         monkeypatch.setenv("TOPICS_CONFIG", str(path))
 
-    def test_yaml_avec_defauts_et_surcharges(self, monkeypatch, tmp_path):
+    def test_yaml_with_defaults_and_overrides(self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path, """
 defaults:
   history_per_sensor: 50
@@ -60,33 +57,44 @@ topics:
             TopicConfig("c", 50, 200),
         ]
 
-    def test_yaml_sans_defauts(self, monkeypatch, tmp_path):
+    def test_yaml_without_defaults(self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path, "topics:\n  a: {}\n")
         assert _load_topic_configs() == [
             TopicConfig("a", DEFAULT_HISTORY_PER_SENSOR,
                         DEFAULT_WARMUP_MESSAGES)]
 
     @pytest.mark.parametrize("content", ["", "topics: {}\n", "defaults: {}\n"])
-    def test_yaml_sans_topic(self, monkeypatch, tmp_path, content):
+    def test_yaml_without_topics(self, monkeypatch, tmp_path, content):
         self.write_yaml(monkeypatch, tmp_path, content)
         with pytest.raises(ValueError, match="aucun topic"):
             _load_topic_configs()
 
-    def test_fichier_absent(self, monkeypatch, tmp_path):
+    def test_missing_file(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TOPICS_CONFIG", str(tmp_path / "absent.yaml"))
         with pytest.raises(FileNotFoundError, match="absent.yaml"):
             _load_topic_configs()
 
-    def test_topic_duplique_refuse(self, monkeypatch, tmp_path):
+    def test_duplicate_topic_rejected(self, monkeypatch, tmp_path):
         """PyYAML garderait le second bloc en silence (historique perdu)."""
         self.write_yaml(monkeypatch, tmp_path,
                         "topics:\n  a: {}\n  b: {}\n  a:\n    history_per_sensor: 7\n")
         with pytest.raises(yaml.YAMLError, match="cle dupliquee : 'a'"):
             _load_topic_configs()
 
-    def test_variables_d_environnement_ignorees(self, monkeypatch, tmp_path):
-        """KAFKA_TOPICS / HISTORY_PER_SENSOR / WARMUP_MESSAGES ne sont plus lues : le YAML
-        est la seule source."""
+    @pytest.mark.parametrize("content", [
+        "- a\n- b\n",                                  # liste a la racine
+        "topics:\n  - a\n",                            # liste de topics
+        "topics:\n  a: [1]\n",                         # reglages en liste
+        "topics:\n  a:\n    history_per_sensor: beaucoup\n",
+        "defaults: 3\ntopics:\n  a: {}\n",
+    ])
+    def test_invalid_structure_message_names_file(self, monkeypatch,
+                                                  tmp_path, content):
+        self.write_yaml(monkeypatch, tmp_path, content)
+        with pytest.raises(ValueError, match="topics.yaml : contenu invalide"):
+            _load_topic_configs()
+
+    def test_environment_variables_ignored(self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path, "topics:\n  a: {}\n")
         monkeypatch.setenv("KAFKA_TOPICS", "x,y")
         monkeypatch.setenv("HISTORY_PER_SENSOR", "7")
@@ -95,7 +103,7 @@ topics:
             TopicConfig("a", DEFAULT_HISTORY_PER_SENSOR,
                         DEFAULT_WARMUP_MESSAGES)]
 
-    def test_fichier_du_depot_valide(self, monkeypatch):
+    def test_repo_file_valid(self, monkeypatch):
         monkeypatch.setenv("TOPICS_CONFIG", "config/topics.yaml")
         configs = {t.name: t for t in _load_topic_configs()}
         assert set(configs) == {
@@ -118,6 +126,25 @@ class TestSettings:
     def test_topics(self):
         assert self.make().topics == ["a", "b"]
 
+    def test_environment_read_at_instantiation(self, monkeypatch):
+        monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "broker-test:9092")
+        monkeypatch.setenv("KAFKA_USERNAME", "u")
+        monkeypatch.setenv("KAFKA_PASSWORD", "")
+        settings = Settings(topic_configs=[], alerts=AlertsConfig())
+        assert settings.bootstrap_servers == "broker-test:9092"
+        assert settings.sasl_username == "u"
+        assert settings.sasl_password == ""
+
+    @pytest.mark.parametrize("protocol,ssl,sasl", [
+        ("PLAINTEXT", False, False),
+        ("ssl", True, False),
+        ("SASL_PLAINTEXT", False, True),
+        ("SASL_SSL", True, True),
+    ])
+    def test_ssl_and_sasl_by_protocol(self, protocol, ssl, sasl):
+        settings = self.make(security_protocol=protocol)
+        assert (settings.uses_ssl, settings.uses_sasl) == (ssl, sasl)
+
     def test_consumer_config_plaintext(self):
         config = self.make(security_protocol="plaintext").consumer_config("a")
         assert config == {
@@ -128,7 +155,7 @@ class TestSettings:
             "security_protocol": "PLAINTEXT",
         }
 
-    def test_consumer_config_sans_topic_sans_groupe(self):
+    def test_consumer_config_without_topic_has_no_group(self):
         config = self.make(security_protocol="PLAINTEXT").consumer_config()
         assert config["group_id"] is None
 
@@ -153,6 +180,54 @@ class TestSettings:
         assert config["sasl_plain_username"] == "u"
 
 
+class TestValidate:
+    def test_valid_configuration(self, plaintext_settings):
+        assert plaintext_settings().validate() == []
+
+    def test_ca_certificate_not_found(self, plaintext_settings, tmp_path):
+        settings = plaintext_settings(security_protocol="SSL",
+                                      ssl_ca_location=str(tmp_path / "absent.crt"))
+        errors = settings.validate()
+        assert len(errors) == 1
+        assert "Certificat CA introuvable" in errors[0]
+
+    def test_ca_certificate_present(self, plaintext_settings, tmp_path):
+        ca = tmp_path / "ca.crt"
+        ca.write_text("cert")
+        settings = plaintext_settings(security_protocol="SSL",
+                                      ssl_ca_location=str(ca))
+        assert settings.validate() == []
+
+    @pytest.mark.parametrize("username,password", [("", ""), ("u", ""), ("", "p")])
+    def test_sasl_credentials_required(self, plaintext_settings, username, password):
+        settings = plaintext_settings(security_protocol="SASL_PLAINTEXT",
+                                      sasl_username=username,
+                                      sasl_password=password)
+        assert any("KAFKA_USERNAME" in e for e in settings.validate())
+
+    def test_no_topic(self, plaintext_settings):
+        errors = plaintext_settings(topic_configs=[]).validate()
+        assert any("Aucun topic" in e for e in errors)
+
+    def test_valid_alerts(self, plaintext_settings):
+        alerts = AlertsConfig(enabled=True, rules={
+            "topic.a": [AlertRule(WARNING, ABOVE, 1)]})
+        assert plaintext_settings(alerts=alerts).validate() == []
+
+    def test_invalid_alerts(self, plaintext_settings):
+        alerts = AlertsConfig(enabled=True, source="alerts.yaml",
+                              errors=["alerts.yaml : severite inconnue"])
+        assert plaintext_settings(alerts=alerts).validate() == \
+            ["alerts.yaml : severite inconnue"]
+
+    def test_alert_on_unconsumed_topic(self, plaintext_settings):
+        alerts = AlertsConfig(enabled=True, source="alerts.yaml", rules={
+            "topic.inconnu": [AlertRule(WARNING, ABOVE, 1)]})
+        (error,) = plaintext_settings(alerts=alerts).validate()
+        assert "topic non consomme" in error
+        assert "topic.inconnu" in error
+
+
 class TestLoadAlertsConfig:
     def write_yaml(self, monkeypatch, tmp_path, content: str) -> str:
         path = tmp_path / "alerts.yaml"
@@ -160,7 +235,7 @@ class TestLoadAlertsConfig:
         monkeypatch.setenv("ALERTS_CONFIG", str(path))
         return str(path)
 
-    def test_fichier_absent_alertes_desactivees(self, monkeypatch, tmp_path,
+    def test_missing_file_disables_alerts(self, monkeypatch, tmp_path,
                                                caplog):
         monkeypatch.setenv("ALERTS_CONFIG", str(tmp_path / "absent.yaml"))
         with caplog.at_level(logging.WARNING):
@@ -172,7 +247,7 @@ class TestLoadAlertsConfig:
         assert "absent.yaml" in caplog.text
         assert "alertes desactivees" in caplog.text
 
-    def test_chemin_par_defaut(self, monkeypatch, tmp_path):
+    def test_default_path(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ALERTS_CONFIG", raising=False)
         monkeypatch.chdir(tmp_path)
         (tmp_path / "config").mkdir()
@@ -181,7 +256,7 @@ class TestLoadAlertsConfig:
             encoding="utf-8")
         assert load_alerts_config().rules == {"a": [AlertRule(WARNING, ABOVE, 1)]}
 
-    def test_fichier_valide_avec_defauts(self, monkeypatch, tmp_path):
+    def test_valid_file_with_defaults(self, monkeypatch, tmp_path):
         source = self.write_yaml(monkeypatch, tmp_path, """
 defaults:
   hysteresis: 2
@@ -204,7 +279,7 @@ rules:
         }
         assert config.validate(["a", "b", "c"]) == []
 
-    def test_hysteresis_par_defaut_nulle(self, monkeypatch, tmp_path):
+    def test_default_hysteresis_is_zero(self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path,
                         "rules:\n  a:\n    - { severity: warning, above: 1 }\n")
         (regle,) = load_alerts_config().rules["a"]
@@ -220,7 +295,7 @@ rules:
         "rules:\n",
         "defaults:\nrules:\n",
     ])
-    def test_fichier_sans_regle(self, monkeypatch, tmp_path, content):
+    def test_file_without_rules(self, monkeypatch, tmp_path, content):
         self.write_yaml(monkeypatch, tmp_path, content)
         config = load_alerts_config()
         assert config.enabled
@@ -245,8 +320,7 @@ rules:
         ("{ severity: warning, above: true }", "seuil non numerique"),
         ("{ severity: warning, above: .nan }", "seuil non numerique"),
         ("{ severity: warning, above: }", "seuil non numerique"),
-        # Entier trop grand pour un float : erreur claire, pas
-        # d'OverflowError
+        # Entier trop grand pour un float : erreur claire, pas d'OverflowError
         ("{ severity: warning, above: 1" + "0" * 400 + " }",
          "seuil non numerique pour above"),
         ("{ severity: warning, above: 1, hysteresis: -1 }",
@@ -255,7 +329,7 @@ rules:
          "hysteresis non numerique : 'un peu'"),
         ("warning", "regle attendue sous la forme"),
     ])
-    def test_regle_invalide(self, monkeypatch, tmp_path, regle, attendu):
+    def test_invalid_rule(self, monkeypatch, tmp_path, regle, attendu):
         source = self.write_yaml(monkeypatch, tmp_path,
                                  f"rules:\n  a:\n    - {{ severity: warning, "
                                  f"above: 1 }}\n    - {regle}\n")
@@ -267,7 +341,7 @@ rules:
         # La regle valide est conservee, l'invalide ecartee
         assert config.rules == {"a": [AlertRule(WARNING, ABOVE, 1.0)]}
 
-    def test_erreurs_multiples_d_une_regle(self, monkeypatch, tmp_path):
+    def test_multiple_errors_in_one_rule(self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path,
                         "rules:\n  a:\n    - { severity: x, above: y }\n")
         config = load_alerts_config()
@@ -278,8 +352,7 @@ rules:
         ("- a\n- b\n", "dictionnaire attendu a la racine"),
         ("regles: {}\n", "cle(s) inconnue(s) a la racine : regles"),
         ("defaults: [1]\n", "'defaults' doit etre un dictionnaire"),
-        # Valeurs "fausses" mais non vides : erreurs de saisie, pas un
-        # dictionnaire vide
+        # Valeurs "fausses" non vides : erreurs de saisie, pas un dict vide
         ("defaults: 0\n", "'defaults' doit etre un dictionnaire"),
         ("defaults: false\n", "'defaults' doit etre un dictionnaire"),
         ("defaults: []\n", "'defaults' doit etre un dictionnaire"),
@@ -297,12 +370,11 @@ rules:
         ("rules:\n  a: { severity: warning, above: 1 }\n",
          "a : liste de regles attendue"),
         ("rules: [\n", "fichier d'alertes illisible"),
-        # Entier au-dela de la limite de conversion de Python (4300
-        # chiffres) : ValueError au decodage, erreur claire
+        # Plus de 4300 chiffres (limite de Python) : ValueError au decodage
         ("rules:\n  a:\n    - { severity: warning, above: 1"
          + "0" * 5000 + " }\n", "fichier d'alertes illisible"),
     ])
-    def test_structure_invalide(self, monkeypatch, tmp_path, content, attendu):
+    def test_invalid_structure(self, monkeypatch, tmp_path, content, attendu):
         self.write_yaml(monkeypatch, tmp_path, content)
         config = load_alerts_config()
 
@@ -320,7 +392,7 @@ rules:
         ("defaults: { hysteresis: 1 }\ndefaults: { hysteresis: 2 }\n",
          "'defaults'", 2),
     ])
-    def test_cle_dupliquee(self, monkeypatch, tmp_path, content, cle, ligne):
+    def test_duplicate_key(self, monkeypatch, tmp_path, content, cle, ligne):
         source = self.write_yaml(monkeypatch, tmp_path, content)
         config = load_alerts_config()
 
@@ -329,9 +401,8 @@ rules:
             f"(ligne {ligne})"]
         assert config.rules == {}
 
-    def test_cle_de_fusion_redefinie_acceptee(self, monkeypatch, tmp_path):
-        """Une cle fusionnee (<<) redefinie n'est pas un doublon : c'est la
-        surcharge prevue par YAML."""
+    def test_redefined_merge_key_accepted(self, monkeypatch, tmp_path):
+        """Cle fusionnee (<<) redefinie : surcharge YAML, pas un doublon."""
         self.write_yaml(monkeypatch, tmp_path, """
 rules:
   a:
@@ -343,7 +414,7 @@ rules:
         assert config.rules == {"a": [AlertRule(WARNING, ABOVE, 1.0),
                                       AlertRule(WARNING, ABOVE, 2.0)]}
 
-    def test_hysteresis_par_defaut_invalide_remplacee_par_zero(
+    def test_invalid_default_hysteresis_replaced_by_zero(
             self, monkeypatch, tmp_path):
         self.write_yaml(monkeypatch, tmp_path, """
 defaults: { hysteresis: -1 }
@@ -355,7 +426,7 @@ rules:
         assert len(config.errors) == 1
         assert config.rules["a"][0].hysteresis == 0.0
 
-    def test_regle_sur_un_topic_non_consomme(self, monkeypatch, tmp_path):
+    def test_rule_on_unconsumed_topic(self, monkeypatch, tmp_path):
         source = self.write_yaml(monkeypatch, tmp_path, """
 rules:
   a:
@@ -370,7 +441,7 @@ rules:
             f"{source} : regles d'alerte sur un topic non consomme "
             "(absent de topics.yaml) : gridd.inconnu"]
 
-    def test_fichier_du_depot_valide(self, monkeypatch):
+    def test_repo_file_valid(self, monkeypatch):
         monkeypatch.setenv("TOPICS_CONFIG", "config/topics.yaml")
         monkeypatch.setenv("ALERTS_CONFIG", "config/alerts.yaml")
         topics = [t.name for t in _load_topic_configs()]
@@ -392,7 +463,7 @@ rules:
         # Occupation : aucune regle active (capacite des salles inconnue)
         assert "gridd.obs.occupancy.count" not in config.rules
 
-    def test_settings_charge_les_alertes(self, monkeypatch, tmp_path):
+    def test_settings_loads_alerts(self, monkeypatch, tmp_path):
         monkeypatch.setenv("ALERTS_CONFIG", str(tmp_path / "absent.yaml"))
         settings = Settings(topic_configs=[TopicConfig("a", 1, 0)])
         assert settings.alerts == AlertsConfig(enabled=False,

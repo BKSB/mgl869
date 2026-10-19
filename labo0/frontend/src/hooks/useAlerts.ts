@@ -4,21 +4,16 @@ import { applyEvent, eventKey, sortAlerts } from '../lib/alerts'
 import { RECONNECT_DELAY_MS } from '../lib/stream'
 import type { Alert, AlertEvent, AlertRule, AlertsMessage, AlertsSnapshot, AlertsStatus } from '../types'
 
-/** Evenements recents conserves cote client (le panneau en montre 10). */
 const RECENT_MAX = 50
-/** Alertes desactivees : l'etat est reverifie a ce rythme, le backend
- * pouvant redemarrer avec un fichier de regles. */
+/** Alertes desactivees : GET refait a ce rythme (le backend peut redemarrer avec des regles). */
 const DISABLED_RECHECK_MS = 30_000
 
 interface State {
-  /** GET /api/alerts a repondu au moins une fois. */
   loaded: boolean
   status: AlertsStatus
   active: Alert[]
   recent: AlertEvent[]
   rules: Record<string, AlertRule[]>
-  /** Dernier evenement recu en direct (annonce aux lecteurs d'ecran) ;
-   * jamais un evenement du GET initial. */
   latest: AlertEvent | null
 }
 
@@ -44,8 +39,7 @@ function reducer(state: State, action: Action): State {
       }
     }
     case 'snapshot':
-      // Le snapshot fait foi : il remplace les alertes actives (re-synchro
-      // apres une reconnexion, evenements manques compris)
+      // Le snapshot fait foi : re-synchro apres reconnexion, evenements manques compris
       return { ...state, status: 'live', active: sortAlerts(action.active) }
     case 'event': {
       const key = eventKey(action.event)
@@ -58,8 +52,7 @@ function reducer(state: State, action: Action): State {
       }
     }
     case 'disconnected':
-      // Alertes desactivees : une reverification en echec garde le dernier
-      // etat connu (« desactivees »), ce n'est pas une coupure du flux
+      // Desactivees : un GET de reverification en echec n'est pas une coupure du flux
       return state.status === 'disabled' ? state : { ...state, status: 'disconnected' }
   }
 }
@@ -70,32 +63,24 @@ const NO_SENSORS: Record<string, Alert> = {}
 export interface AlertsApi {
   /** Au moins une reponse de GET /api/alerts (sinon l'etat est inconnu). */
   loaded: boolean
-  /** « disconnected » : dernier etat connu, non confirme depuis la coupure. */
   status: AlertsStatus
   /** Critical d'abord, puis la plus ancienne. */
   active: Alert[]
   /** Plus recent d'abord, 50 au plus. */
   recent: AlertEvent[]
   rules: Record<string, AlertRule[]>
+  /** Dernier evenement recu en direct, jamais du GET initial (annonces). */
   latest: AlertEvent | null
-  /** Alertes actives d'un topic (reference stable entre deux changements). */
+  /** Reference stable tant que les alertes actives ne changent pas. */
   byTopic: (topic: string | null) => Alert[]
-  /** Alertes actives d'un topic par node_id (reference stable). */
+  /** Par node_id ; reference stable aussi. */
   bySensor: (topic: string | null) => Record<string, Alert>
 }
 
-/**
- * Alertes du backend : GET /api/alerts (actives, recents, regles), puis
- * WebSocket /ws/alerts (snapshot a la connexion, puis un message par
- * evenement). Coupure : l'etat reste « disconnected » (dernier etat connu,
- * non confirme) pendant les tentatives, toutes les 3 s (GET puis
- * WebSocket), jusqu'a une reponse fraiche du GET ; le snapshot
- * re-synchronise ensuite les alertes actives. Si le backend n'a pas de
- * regles (enabled = false) : etat « disabled », aucun WebSocket, et le GET
- * est refait toutes les 30 s (fichier de regles ajoute puis backend
- * redemarre). Tous les dispatch partent de callbacks asynchrones (reponse,
- * message, minuteur), jamais du corps de l'effet.
- */
+/** GET /api/alerts puis WebSocket /ws/alerts. Coupure : « disconnected » jusqu'a une
+ * reponse fraiche du GET (tentatives toutes les 3 s), puis le snapshot re-synchronise.
+ * Sans regles : « disabled », sans WebSocket. Dispatch uniquement depuis des
+ * callbacks asynchrones, jamais dans le corps de l'effet. */
 export function useAlerts(): AlertsApi {
   const [state, dispatch] = useReducer(reducer, INITIAL)
 
@@ -164,8 +149,7 @@ export function useAlerts(): AlertsApi {
     }
   }, [])
 
-  // Index par topic puis par capteur : references stables tant que les
-  // alertes actives ne changent pas (composants memo en aval)
+  // References stables pour les composants memo en aval
   const index = useMemo(() => {
     const topics: Record<string, Alert[]> = {}
     const sensors: Record<string, Record<string, Alert>> = {}

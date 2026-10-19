@@ -1,14 +1,14 @@
 import { memo, useMemo, useRef, useState } from 'react'
 import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
+import { SeriesKey } from './SeriesKey'
 import { csvFilename, downloadText, toCsv } from '../lib/csv'
 import { updateKeepingFocus } from '../lib/focus'
-import { fmtCount, fmtDateTime, fmtDayTime, fmtTime, fmtValue } from '../lib/format'
-import { topicLabel } from '../lib/labels'
+import { fmtCount, fmtDateTime, fmtDayTime, fmtTime, fmtValue, plural } from '../lib/format'
+import { topicLabel } from '../lib/metrics'
 import type { ChartRow } from '../types'
 
 interface Props {
-  /** Memes lignes que le graphe (meme plage, memes capteurs). */
   rows: ChartRow[]
   ids: string[]
   names: Record<string, string>
@@ -17,19 +17,14 @@ interface Props {
   decimals: number
   topic: string
   rangeLabel: string
-  /** Historique affiche > 24 h : horodatages avec la date. */
   longSpan: boolean
-  /** Plage vide : bascule sur tout l'historique. */
   onShowAll?: () => void
 }
 
 const PAGE = 300
-/** Largeur minimale d'une colonne de capteur (px) : sous cette largeur, le
- * tableau defile horizontalement dans son cadre au lieu d'ecraser les colonnes. */
+/** Colonne de capteur (px) : en dessous, le cadre defile au lieu d'ecraser les colonnes. */
 const COL_MIN = 96
 
-/** Vue tableau jumelle du graphe : plus recentes en haut, 300 lignes par
- * page, export CSV fr-CA. */
 export const DataTable = memo(function DataTable({
   rows, ids, names, slots, unit, decimals, topic, rangeLabel, longSpan, onShowAll,
 }: Props) {
@@ -41,7 +36,7 @@ export const DataTable = memo(function DataTable({
     return out
   }, [rows, limit])
 
-  if (rows.length === 0) return <EmptyState kind="empty-range" onShowAll={onShowAll} />
+  if (rows.length === 0) return <EmptyState kind="empty-range" onAction={onShowAll} />
 
   const exportCsv = () => {
     downloadText(csvFilename(topic, rangeLabel), toCsv(rows, ids, names, decimals))
@@ -53,9 +48,8 @@ export const DataTable = memo(function DataTable({
         <p className="datatable__count">
           {shown.length < rows.length
             ? `${fmtCount(shown.length)} lignes sur ${fmtCount(rows.length)}`
-            : `${fmtCount(rows.length)} ligne${rows.length > 1 ? 's' : ''}`}
-          {/* Sous 720 px, l'ordre passe sur sa propre ligne (sans le point
-              median) au lieu d'etre tronque */}
+            : plural(rows.length, 'ligne')}
+          {/* Sous 720 px, l'ordre passe a la ligne, sans le point median */}
           <span className="datatable__sep"> · </span>
           <span className="datatable__order">plus récentes en haut</span>
         </p>
@@ -70,7 +64,6 @@ export const DataTable = memo(function DataTable({
         </button>
       </div>
       <div ref={regionRef} className="datatable" role="region" tabIndex={0} aria-label="Tableau des mesures">
-        {/* Colonnes de capteur de largeur egale (table-layout: fixed) */}
         <table
           className={longSpan ? 'datatable__table datatable__table--long' : 'datatable__table'}
           style={{ minWidth: `calc(var(--dt-time-w) + ${ids.length * COL_MIN}px)` }}
@@ -83,10 +76,9 @@ export const DataTable = memo(function DataTable({
               <th scope="col">Horodatage</th>
               {ids.map((id) => (
                 <th key={id} scope="col">
-                  <span className="key" style={{ background: `var(--series-${slots[id] ?? 1})` }} aria-hidden="true" />
-                  {/* Une seule ligne : nom tronque (complet en title) ; l'unite
-                      est dans le titre de la carte et la legende du tableau */}
-                  <span className="datatable__name" title={names[id] ?? id}>{names[id] ?? id}</span>
+                  <SeriesKey slot={slots[id]} />
+                  {/* Sans unite : elle est dans le titre de la carte et la caption */}
+                  <span className="datatable__name" title={names[id]}>{names[id]}</span>
                 </th>
               ))}
             </tr>

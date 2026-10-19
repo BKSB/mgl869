@@ -8,7 +8,7 @@ interface Props {
   period: number
 }
 
-/** « Mis à jour il y a 5 s » : point vert si frais, sinon ambre + horloge. */
+/** En retard : horloge en plus du point ambre, la couleur ne porte pas le sens seule. */
 export function LastUpdated({ t, period }: Props) {
   const now = useNow()
   if (t === undefined) return <span className="updated">—</span>

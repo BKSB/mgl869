@@ -4,15 +4,11 @@ interface Props {
   values: number[]
 }
 
-/** Marge interne (px) : marqueur r 4 + anneau 2 px (centre sur le bord du
- * cercle) entierement dans la boite, sans rognage. */
+/** Marge (px) : marqueur r 4 + moitie de l'anneau 2 px, sans rognage. */
 const PAD = 5
 
-/** Tendance 12 points dessinee en espace pixel : la boite (.spark) prend la
- * taille que lui donne le CSS (largeur souple dans la tile, 28 px de haut ;
- * 24 px sous 720 px) et le trace s'y adapte sans mise a l'echelle. Trait
- * de-emphase 1,5 px, dernier segment et marqueur 8 px dans l'accent avec un
- * anneau surface 2 px, quelle que soit la largeur. Aucune animation. */
+/** Dessinee en pixels dans la boite mesuree (taille fixee par le CSS) : trait et
+ * marqueur ne sont jamais mis a l'echelle. */
 export function Sparkline({ values }: Props) {
   const [ref, { width, height }] = useElementSize<HTMLSpanElement>()
   const n = values.length

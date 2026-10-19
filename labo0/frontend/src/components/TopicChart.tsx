@@ -6,81 +6,64 @@ import { ChartTooltip } from './ChartTooltip'
 import { useElementSize } from '../hooks/useElementSize'
 import { fmtThreshold } from '../lib/alerts'
 import type { SensorDerived } from '../hooks/useSeriesStats'
-import { fmtDayTime, fmtTime, fmtValue } from '../lib/format'
-import { topicLabel } from '../lib/labels'
+import { fmtDayTime, fmtTime, fmtValue, plural } from '../lib/format'
+import { topicLabel } from '../lib/metrics'
 import { rangeLabel } from '../lib/ranges'
 import type { TimeRange } from '../lib/ranges'
 import { xTicks, yLadder } from '../lib/ticks'
 import type { YLadder } from '../lib/ticks'
 import type { AlertRule, ChartRow } from '../types'
 
-/** Largeur reservee a l'axe Y (44) et a la marge droite (16) : reste le trace. */
+/** Axe Y (44) + marge droite (16). */
 const PLOT_INSET_X = 60
-/** Ecart minimal entre deux libelles X (« 18:30 », « 04 oct. 18:30 »). */
+/** Ecart min. entre libelles X (px), assez pour « 04 oct. 18:30 ». */
 const X_LABEL_PX = 90
-/** Hauteur de zone par pas Y vise (bande d'axe X comprise). */
+/** Hauteur de zone (px, axe X compris) par pas Y. */
 const Y_TICK_PX = 48
 const Y_TARGET_MIN = 4
 const MARGIN = { top: 12, right: 16, bottom: 4, left: 0 }
-/** Hauteur de la bande d'axe X (ticks 11 px et leur marge), hors trace. */
+/** Bande d'axe X (px) : ticks 11 px et leur marge. */
 const X_AXIS_BAND = 30
-/** Seuil a moins de 16 px du haut du trace : etiquette sous la ligne (elle
- * serait rognee au-dessus). */
+/** Seuil a moins de 16 px du haut : etiquette sous la ligne (rognee sinon). */
 const LABEL_FLIP_PX = 16
-/** Seuils sous les courbes (Line : 400), au-dessus de la grille (-100). Les
- * etiquettes gardent le calque par defaut des Label (2000) : lisibles. */
+/** Recharts : entre la grille (-100) et les courbes (400) ; les Label restent a 2000. */
 const THRESHOLD_Z = 350
 
-/** « Seuil critique 1 500 ppm », « Seuil bas d’avertissement 18 °C ». */
-function thresholdText(rule: AlertRule, decimals: number, unit: string): string {
+/** Sans le mot « Seuil » : « critique 1 500 ppm », « bas d'avertissement 18 °C ». */
+function thresholdDetail(rule: AlertRule, decimals: number, unit: string): string {
   const severity = rule.severity === 'critical' ? 'critique' : 'd’avertissement'
   const low = rule.direction === 'below' ? 'bas ' : ''
-  return `Seuil ${low}${severity} ${fmtThreshold(rule.threshold, decimals, unit)}`
+  return `${low}${severity} ${fmtThreshold(rule.threshold, decimals, unit)}`
 }
 
 interface Props {
-  /** Lignes larges deja fenetrees et fusionnees (useSeriesStats). */
+  /** Deja fenetrees et fusionnees (useSeriesStats). */
   rows: ChartRow[]
-  /** Capteurs traces, dans l'ordre. */
   ids: string[]
   slots: Record<string, number>
   names: Record<string, string>
   byId: Record<string, SensorDerived>
-  /** Seau de regroupement des lignes (ms). */
   bucket: number
   unit: string
   decimals: number
   range: TimeRange
-  /** Historique affiche > 24 h : ticks et infobulle avec la date. */
   longSpan: boolean
-  /** Capteur survole (tile ou legende) PARMI les series tracees : les autres
-   * passent a .25 ; null, rien n'est attenue. App filtre deja : en mode
-   * isole, survoler un autre capteur laisse cette prop a null et le graphe
-   * (memo) n'est pas re-rendu. */
+  /** Serie tracee ou null, filtre par App pour ne pas casser le memo. */
   hovered: string | null
   topicName: string
-  /** Regles d'alerte du topic : une ligne de seuil pointillee par regle
-   * dont le seuil tombe dans l'echelle Y (jamais elargie pour un seuil). */
+  /** Tracees si le seuil tombe dans l'echelle Y, jamais elargie pour un seuil. */
   rules: AlertRule[]
 }
 
-/**
- * Le grand graphe du topic. Lignes 2 px, grille hairline solide, crosshair
- * solide, infobulle personnalisee ; accessibilityLayer (defaut Recharts 3) :
- * le focus + fleches deplacent le curseur au clavier. Les graduations sont
- * calculees a la main (lib/ticks) : pas « propres » sur Y, horloge locale sur X.
- */
+/** Clavier : accessibilityLayer (defaut Recharts 3), les fleches deplacent le curseur.
+ * Graduations calculees (lib/ticks) : pas ronds en Y, horloge locale en X. */
 export const TopicChart = memo(function TopicChart({
   rows, ids, slots, names, byId, bucket, unit, decimals, range, longSpan, hovered, topicName, rules,
 }: Props) {
-  // Taille de la zone du graphe : densite des graduations ({ 0, 0 } avant la
-  // premiere mesure, qui arrive avant la premiere peinture)
+  // Taille de la zone : densite des graduations
   const [areaRef, { width, height }] = useElementSize<HTMLDivElement>()
-  // Etendue Y = min / max (stats de la fenetre) des seules series tracees.
-  // Cible de 4 pas au moins, plus si la hauteur le permet (un pas tous les
-  // 48 px) ; yLadder complete le domaine jusqu'a la cible, donc une cible
-  // haute peut l'elargir : on garde l'echelle ou les donnees occupent la plus
-  // grande part du domaine (la plus petite cible a egalite).
+  // yLadder etend le domaine jusqu'a la cible de pas : parmi les cibles que
+  // permet la hauteur, garder celle ou les donnees remplissent le plus le domaine
   const ladder = useMemo(() => {
     let min = Infinity
     let max = -Infinity
@@ -101,11 +84,8 @@ export const TopicChart = memo(function TopicChart({
   }, [byId, ids, decimals, height])
   const t0 = rows[0]?.t
   const t1 = rows[rows.length - 1]?.t
-  // Nombre de ticks X selon la largeur du trace : l'ecart entre libelles est
-  // garanti par le pas choisi, Recharts les affiche donc tous
-  // (preserveStartEnd + petit ecart : il ne retire qu'un libelle qui en
-  // chevaucherait un autre, et decale vers l'interieur un libelle de bord au
-  // lieu de le rogner)
+  // Le pas garantit l'ecart entre libelles : preserveStartEnd + faible minTickGap
+  // ne retire qu'un chevauchement et decale un libelle de bord au lieu de le rogner
   const maxTicksX = width > 0 ? Math.max(2, Math.floor((width - PLOT_INSET_X) / X_LABEL_PX)) : undefined
   const ticksX = useMemo(
     () => (t0 !== undefined && t1 !== undefined ? xTicks(t0, t1, maxTicksX) : []),
@@ -117,9 +97,6 @@ export const TopicChart = memo(function TopicChart({
     [longSpan],
   )
   const yFmt = useMemo(() => (v: number) => fmtValue(v, ladder.decimals), [ladder.decimals])
-  // Seuils visibles : dans le domaine Y calcule (ifOverflow « discard » ne
-  // trace de toute facon rien au-dela) ; etiquette sous la ligne si elle est
-  // collee au haut du trace
   const thresholds = useMemo(() => {
     const [lo, hi] = ladder.domain
     const plotH = Math.max(0, height - MARGIN.top - MARGIN.bottom - X_AXIS_BAND)
@@ -127,12 +104,12 @@ export const TopicChart = memo(function TopicChart({
       .filter((r) => r.threshold >= lo && r.threshold <= hi)
       .map((rule) => ({
         rule,
-        text: thresholdText(rule, decimals, unit),
+        detail: thresholdDetail(rule, decimals, unit),
         below: hi > lo && ((hi - rule.threshold) / (hi - lo)) * plotH < LABEL_FLIP_PX,
       }))
   }, [rules, ladder.domain, height, decimals, unit])
   const thresholdsLabel = thresholds.length > 0
-    ? ` ; seuils tracés : ${thresholds.map((t) => t.text.replace(/^Seuil /, '')).join(', ')}`
+    ? ` ; seuils tracés : ${thresholds.map((t) => t.detail).join(', ')}`
     : ''
 
   return (
@@ -140,7 +117,7 @@ export const TopicChart = memo(function TopicChart({
       ref={areaRef}
       className="chart-area"
       role="group"
-      aria-label={`Graphique ${topicLabel(topicName)}, ${ids.length} capteur(s), ${rangeLabel(range)}${thresholdsLabel} ; valeurs détaillées dans la vue Tableau`}
+      aria-label={`Graphique ${topicLabel(topicName)}, ${plural(ids.length, 'capteur')}, ${rangeLabel(range)}${thresholdsLabel} ; valeurs détaillées dans la vue Tableau`}
     >
       <ResponsiveContainer width="100%" height="100%" debounce={100}>
         <LineChart
@@ -171,16 +148,15 @@ export const TopicChart = memo(function TopicChart({
             isAnimationActive={false}
             wrapperStyle={{ outline: 'none' }}
           />
-          {thresholds.map(({ rule, text, below }) => (
+          {thresholds.map(({ rule, detail, below }) => (
             <ReferenceLine
               key={`${rule.direction}-${rule.severity}-${rule.threshold}`}
               y={rule.threshold} ifOverflow="discard" zIndex={THRESHOLD_Z}
               stroke={`var(--status-${rule.severity})`} strokeWidth={1}
               strokeDasharray="4 4" strokeOpacity={0.7}
               label={{
-                value: text,
-                // Boite de hauteur nulle : « insideBottom » place le texte
-                // au-dessus de la ligne, « insideTop » en dessous
+                value: `Seuil ${detail}`,
+                // Boite de hauteur nulle : insideBottom place le texte au-dessus, insideTop dessous
                 position: below ? 'insideTopRight' : 'insideBottomRight',
                 offset: 4,
                 fill: 'var(--text-secondary)',
@@ -195,8 +171,8 @@ export const TopicChart = memo(function TopicChart({
           ))}
           {ids.map((id) => (
             <Line
-              key={id} dataKey={id} name={names[id] ?? id} type="monotone" connectNulls
-              stroke={`var(--series-${slots[id] ?? 1})`} strokeWidth={2}
+              key={id} dataKey={id} name={names[id]} type="monotone" connectNulls
+              stroke={`var(--series-${slots[id]})`} strokeWidth={2}
               strokeLinecap="round" strokeLinejoin="round"
               strokeOpacity={hovered !== null && hovered !== id ? 0.25 : 1}
               dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface-1)' }}

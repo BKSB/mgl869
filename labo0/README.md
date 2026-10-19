@@ -23,13 +23,14 @@ En developpement (rechargement a chaud) :
 cd frontend
 npm install
 npm run dev     # http://localhost:5173 (le backend doit tourner sur :8000)
+npm test        # Vitest : fonctions pures de src/lib (non lance par la CI)
 ```
 
 Le dashboard charge la liste des topics (`GET /api/topics`), s'abonne au flux
-WebSocket du topic selectionne et affiche une carte par capteur (`node_id`) :
-derniere valeur, zone, et courbe des 120 derniers points. Le proxy Vite
-(`vite.config.ts`) redirige `/api` et `/ws` vers le backend — pas de CORS a
-gerer en dev.
+WebSocket du topic selectionne et affiche les series de chaque capteur
+(`sensor_id`) : tiles, graphe, legende et vue tableau (voir
+`frontend/README.md`). Le proxy Vite (`vite.config.ts`) redirige `/api` et
+`/ws` vers le backend — pas de CORS a gerer en dev.
 
 ## Backend : consommateur Kafka
 
@@ -105,9 +106,11 @@ bus.subscribe(alerts)            # service d'alertes
 bus.subscribe(SensorRegistry())  # nouvel observateur, acquisition inchangee
 ```
 
-Le `StreamingService` recoit ce bus (`StreamingService(settings, hub, bus)`)
-et y inscrit lui-meme son hub s'il ne l'est pas deja : ses abonnements
-WebSocket en dependent. Les tests de l'API utilisent le meme `create_bus`.
+Le `StreamingService` recoit ce bus (`StreamingService(settings, hub, bus)`) ;
+seul `create_bus` y inscrit des observateurs. Le hub doit y etre inscrit,
+puisque les abonnements WebSocket du service en dependent : sinon le service
+refuse d'etre construit (`ValueError`). Les tests de l'API utilisent le meme
+`create_bus`.
 
 ### Topics consommes
 
@@ -156,8 +159,10 @@ topics:
 `warmup_messages` se dimensionne ainsi : `history_per_sensor x nb de capteurs
 du topic / nb de partitions`, arrondi au-dessus. `history_per_sensor` vaut
 100 s'il n'est fixe ni sur le topic ni dans `defaults`. Le fichier est
-obligatoire : s'il est absent, ne definit aucun topic ou contient une cle
-dupliquee, le service refuse de demarrer.
+obligatoire : s'il est absent, ne definit aucun topic, contient une cle
+dupliquee ou une structure invalide (liste au lieu d'un dictionnaire,
+reglage non entier), le service refuse de demarrer et journalise une ligne
+qui nomme le fichier (pas de traceback).
 
 ### Alertes
 
@@ -166,7 +171,9 @@ bus : il evalue chaque mesure temps reel contre les regles de son topic, tient
 la liste des alertes actives (une au plus par capteur et par topic) et
 diffuse chaque changement de niveau. L'evaluation (seuils, hysteresis,
 transitions, messages) est une logique pure, testee isolement, dans
-`app/data_management/data_processing/alert_rules.py`.
+`app/data_management/data_processing/alert_rules.py` ; le formatage francais
+des messages (nombres, unites, libelles des topics) vit a cote, dans
+`formatting.py`.
 
 **Configuration** : `backend/config/alerts.yaml` (chemin modifiable par
 `ALERTS_CONFIG`), monte dans le conteneur comme `topics.yaml` (modifiable sans

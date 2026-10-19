@@ -5,11 +5,11 @@ import { AppBar } from './components/AppBar'
 import { ChartCard } from './components/ChartCard'
 import { DataTable } from './components/DataTable'
 import { EmptyState } from './components/EmptyState'
-import { FilterBar } from './components/FilterBar'
+import { CHECKED_RANGE, CHECKED_VIEW, FilterBar } from './components/FilterBar'
 import { LegendTable } from './components/LegendTable'
 import { StatTileRow } from './components/StatTileRow'
 import { TopicChart } from './components/TopicChart'
-import { TopicTabs } from './components/TopicTabs'
+import { TOPIC_PANEL_ID, TopicTabs } from './components/TopicTabs'
 import { useAlerts } from './hooks/useAlerts'
 import { useHealth } from './hooks/useHealth'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
@@ -18,62 +18,49 @@ import { useSeriesStats } from './hooks/useSeriesStats'
 import { useTheme } from './hooks/useTheme'
 import { useTopicStream } from './hooks/useTopicStream'
 import { updateKeepingFocus } from './lib/focus'
-import { fmtCount, fmtDuration, fmtValue } from './lib/format'
-import { topicLabel } from './lib/labels'
-import { getTopicMeta } from './lib/metrics'
-import { RANGE_PRESETS, rangeLabel } from './lib/ranges'
+import { fmtDuration, fmtValue, plural } from './lib/format'
+import { getTopicMeta, topicLabel } from './lib/metrics'
+import { deltaRangeLabel, RANGE_PRESETS, rangeLabel, rangeTitle } from './lib/ranges'
 import type { TimeRange } from './lib/ranges'
 import { colorSlots, sensorNames } from './lib/sensors'
+import { readStored, writeStored } from './lib/storage'
 import { EMPTY_LABEL, emptyKind } from './lib/stream'
+import { DAY } from './lib/time'
 import type { Alert, AlertRule, ConnectionStatus, TopicInfo, ViewMode } from './types'
 import './App.css'
 import './components.css'
 
 const VIEW_KEY = 'gridd.view'
-const ONE_HOUR = 60 * 60_000
-const ONE_DAY = 24 * ONE_HOUR
 /** Flux ouvert sans aucun message apres ce delai : le topic est muet. */
 const WAITING_DELAY_MS = 8000
-/** Landmark main, cible du lien d'evitement (toujours rendu, meme en erreur). */
+/** Cible du lien d'evitement et focus de repli : main est rendu meme en erreur. */
 const MAIN_ID = 'contenu'
-/** Boutons coches de la barre de filtres : plage (premier groupe) et vue. */
-const CHECKED_RANGE = '.filterbar > [role="radiogroup"] [role="radio"][aria-checked="true"]'
-const CHECKED_VIEW = '.filterbar__view [role="radio"][aria-checked="true"]'
 /** Topic sans regle d'alerte : reference stable (TopicChart est memo). */
 const NO_RULES: AlertRule[] = []
 
-/** Cible du focus quand une action demonte l'element focalise (raccourci v
- * ou 1 a 4, « Afficher tout ») : le bouton coche d'un groupe de la barre de
- * filtres, ou le landmark main si ce bouton est desactive. */
+/** Focus de repli quand une action demonte l'element focalise : bouton coche
+ * du groupe, ou main si ce bouton est desactive. */
 const checkedOr = (selector: string) => (): HTMLElement | null => {
   const next = document.querySelector<HTMLButtonElement>(selector)
   return next && !next.disabled ? next : document.getElementById(MAIN_ID)
 }
 const focusMain = () => document.getElementById(MAIN_ID)
 
-function readStoredView(): ViewMode {
-  try {
-    return localStorage.getItem(VIEW_KEY) === 'table' ? 'table' : 'chart'
-  } catch {
-    return 'chart'
-  }
-}
+const readStoredView = (): ViewMode => (readStored(VIEW_KEY) === 'table' ? 'table' : 'chart')
 
 export default function App() {
   const [topics, setTopics] = useState<TopicInfo[]>([])
   const [topicsError, setTopicsError] = useState(false)
-  // /api/topics a repondu au moins une fois (distingue « chargement » de « liste vide »)
+  // Distingue « chargement » de « liste vide »
   const [topicsLoaded, setTopicsLoaded] = useState(false)
   const [topic, setTopic] = useState<string | null>(null)
-  const [sensor, setSensor] = useState<string | 'all'>('all')
+  // Capteur isole ; null : tous les capteurs
+  const [sensor, setSensor] = useState<string | null>(null)
   const [range, setRange] = useState<TimeRange>('all')
   const [view, setView] = useState<ViewMode>(readStoredView)
   const [hovered, setHovered] = useState<string | null>(null)
-  // Topic pour lequel le delai d'attente s'est ecoule sans aucune donnee
   const [waitingTopic, setWaitingTopic] = useState<string | null>(null)
 
-  // « connecting » tant qu'aucun flux n'a repondu (et sans topic) : jamais de
-  // fausse coupure au chargement
   const { sensors, status } = useTopicStream(topic)
   const { health, state: healthState } = useHealth()
   const alerts = useAlerts()
@@ -83,8 +70,7 @@ export default function App() {
   const loadTopics = useCallback(() => {
     fetchTopics()
       .then((list) => {
-        // « Réessayer » reussi : l'etat d'erreur et son bouton focalise sont
-        // remplaces par les onglets, le focus passe au landmark main
+        // Reessai reussi : le bouton focalise disparait, focus au main
         updateKeepingFocus(() => {
           setTopics(list)
           setTopicsError(false)
@@ -100,18 +86,12 @@ export default function App() {
   }, [loadTopics])
 
   useEffect(() => {
-    try {
-      localStorage.setItem(VIEW_KEY, view)
-    } catch {
-      // stockage indisponible : la vue vaut pour la session
-    }
+    writeStored(VIEW_KEY, view)
   }, [view])
 
-  // Liste de topics vide ou en erreur : aucun flux a montrer, pas de badge
   const noTopics = topicsLoaded && !topicsError && topics.length === 0
   const badgeStatus: ConnectionStatus | null = topicsError || noTopics ? null : status
 
-  // Derives purs : tri naturel des node_id, couleurs et noms stables
   const sensorIds = useMemo(
     () => Object.keys(sensors).sort((a, b) => a.localeCompare(b, 'fr-CA', { numeric: true })),
     [sensors],
@@ -119,23 +99,22 @@ export default function App() {
   const slots = useMemo(() => colorSlots(sensorIds), [sensorIds])
   const names = useMemo(() => sensorNames(sensors, sensorIds), [sensors, sensorIds])
   const shownIds = useMemo(
-    () => (sensor === 'all' ? sensorIds : sensorIds.filter((id) => id === sensor)),
+    () => (sensor === null ? sensorIds : sensorIds.filter((id) => id === sensor)),
     [sensorIds, sensor],
   )
-  // Filet de securite : un survol ne compte que s'il designe un capteur affiche
+  // Filet de securite : survol d'un capteur absent ignore
   const hoveredId = hovered !== null && sensorIds.includes(hovered) ? hovered : null
-  // Le graphe n'attenue que s'il trace le capteur survole : en mode isole, le
-  // survol d'un autre capteur laisse sa prop a null (pas de re-rendu)
+  // Survol hors des series tracees -> null : le graphe (memo) n'est pas re-rendu
   const chartHover = hoveredId !== null && shownIds.includes(hoveredId) ? hoveredId : null
   const meta = getTopicMeta(topic)
-  // Alertes actives du topic par capteur et regles (references stables)
+  // References stables : LegendTable et TopicChart sont memo
   const sensorAlerts = alerts.bySensor(topic)
   const topicRules = (topic !== null && alerts.rules[topic]) || NO_RULES
   const unit = sensors[sensorIds[0]]?.last.unit ?? ''
-  const { anchorT, byId, totalPoints, rows, lastT, period, bucket } = useSeriesStats(sensors, sensorIds, shownIds, range)
+  const { anchorT, byId, totalPoints, rows, firstT, lastT, period, bucket } =
+    useSeriesStats(sensors, sensorIds, shownIds, range)
 
-  // Topic muet : flux ouvert mais aucun message apres WAITING_DELAY_MS. Le
-  // setState passe par le minuteur (asynchrone), jamais dans le corps de l'effet.
+  // setState dans le minuteur, jamais dans le corps de l'effet
   const empty = sensorIds.length === 0
   useEffect(() => {
     if (!topic || status !== 'live' || !empty) return
@@ -143,74 +122,58 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [topic, status, empty])
   const waiting = empty && status === 'live' && waitingTopic !== null && waitingTopic === topic
-  // Raison de l'etat vide, calculee une fois : sous-titre, tiles, corps et
-  // aria-busy de la carte en derivent (memes mots partout)
+  // Raison de l'etat vide, calculee une fois : sous-titre, tiles et carte en derivent
   const emptyState = emptyKind(empty, status, waiting)
 
   const selectTopic = useCallback((name: string) => {
     setTopic(name)
-    setSensor('all') // nouveau topic = nouveaux capteurs
+    setSensor(null)
     setHovered(null)
     setWaitingTopic((w) => (w === name ? w : null)) // un autre topic repart en rejeu
   }, [])
-  // « Voir » d'une alerte : son topic, son capteur isole (mises a jour
-  // groupees : le setSensor final l'emporte sur celui de selectTopic)
+  // Mises a jour groupees : ce setSensor l'emporte sur celui de selectTopic
   const showAlert = useCallback((alert: Alert) => {
     selectTopic(alert.topic)
     setSensor(alert.node_id)
   }, [selectTopic])
-  const toggleSensor = useCallback((id: string) => setSensor((s) => (s === id ? 'all' : id)), [])
-  const showAllSensors = useCallback(() => setSensor('all'), [])
-  // Changer de vue demonte la legende (ou le tableau) : la ligne survolee ne
-  // recoit jamais son mouseleave, le survol est donc remis a zero ici.
+  const toggleSensor = useCallback((id: string) => setSensor((s) => (s === id ? null : id)), [])
+  const showAllSensors = useCallback(() => setSensor(null), [])
+  // La vue demontee ne recoit jamais son mouseleave : survol remis a zero
   const changeView = useCallback((v: ViewMode) => {
     setView(v)
     setHovered(null)
   }, [])
   const toggleView = useCallback(() => {
-    // le contenu focalise est demonte : le focus passe au bouton de vue coche
+    // Contenu focalise demonte : focus au bouton de vue coche
     updateKeepingFocus(() => {
       setView((v) => (v === 'chart' ? 'table' : 'chart'))
       setHovered(null)
     }, checkedOr(CHECKED_VIEW))
   }, [])
-  // « Afficher tout » de l'etat « aucune mesure dans la plage » : cet etat et
-  // son bouton sont remplaces par le graphe ou le tableau
+  // « Afficher tout » disparait avec l'etat vide qui le porte
   const showAllRange = useCallback(() => {
     updateKeepingFocus(() => setRange('all'), checkedOr(CHECKED_RANGE))
   }, [])
   const selectRangeIndex = useCallback((i: number) => {
     const preset = RANGE_PRESETS[i]
     if (!preset) return
-    // une plage plus courte peut demonter le bouton « lignes de plus » du tableau
+    // Une plage plus courte peut demonter le bouton « lignes de plus » du tableau
     updateKeepingFocus(() => setRange(preset.value), checkedOr(CHECKED_RANGE))
   }, [])
 
   useKeyboardShortcuts({ onRange: selectRangeIndex, onToggleView: toggleView, onEscape: showAllSensors })
 
-  // En-tete de la carte
-  const shownCount = shownIds.length
-  const sensorsLabel = `${shownCount} capteur${shownCount > 1 ? 's' : ''}`
-  let minFirstT = Infinity
-  for (const id of shownIds) {
-    const stats = byId[id]?.stats
-    if (stats && stats.firstT < minFirstT) minFirstT = stats.firstT
-  }
   const title = topic ? (unit ? `${topicLabel(topic)} · ${unit}` : topicLabel(topic)) : 'Mesures'
-  const span = Number.isFinite(minFirstT) ? ` (${fmtDuration(anchorT - minFirstT)})` : ''
-  const windowLabel = range === 'all'
-    ? `Tout l’historique${span}`
-    : range === ONE_HOUR ? 'Dernière heure' : `Dernières ${rangeLabel(range)}`
+  const span = range === 'all' && firstT !== undefined ? ` (${fmtDuration(anchorT - firstT)})` : ''
   const subtitle = emptyState
     ? EMPTY_LABEL[emptyState]
-    : `${windowLabel} · ${sensorsLabel} · ${fmtCount(totalPoints)} points`
+    : `${rangeTitle(range)}${span} · ${plural(shownIds.length, 'capteur')} · ${plural(totalPoints, 'point')}`
   // Historique affiche > 24 h : l'heure seule serait ambigue (axe, infobulle, tableau)
-  const longSpan = rows.length > 1 && rows[rows.length - 1].t - rows[0].t > ONE_DAY
-  const heroStats = sensor !== 'all' ? byId[sensor]?.stats : undefined
-  const hero = heroStats
-    ? { value: fmtValue(heroStats.last, meta.decimals), unit, caption: names[sensor] ?? sensor }
+  const longSpan = rows.length > 1 && rows[rows.length - 1].t - rows[0].t > DAY
+  const heroStats = sensor !== null ? byId[sensor]?.stats : undefined
+  const hero = sensor !== null && heroStats
+    ? { value: fmtValue(heroStats.last, meta.decimals), unit, caption: names[sensor] }
     : undefined
-  const tileRangeLabel = range === 'all' ? 'l’historique' : rangeLabel(range)
 
   let body: ReactNode
   if (emptyState) {
@@ -228,7 +191,7 @@ export default function App() {
     body = (
       <>
         {rows.length === 0 ? (
-          <EmptyState kind="empty-range" onShowAll={showAllRange} />
+          <EmptyState kind="empty-range" onAction={showAllRange} />
         ) : (
           <TopicChart
             rows={rows} ids={shownIds} slots={slots} names={names} byId={byId} bucket={bucket}
@@ -253,14 +216,13 @@ export default function App() {
           status={badgeStatus} health={health} healthState={healthState}
           topics={topics} alerts={alerts} onShowAlert={showAlert} theme={theme} onTheme={setTheme}
         />
-        {/* Landmark main : onglets, filtres, tiles et carte (l'app bar est le
-            seul banner). Cible du lien d'evitement : focalisable par script
-            seulement ; id="main" reste sur le tabpanel (aria-controls). */}
+        {/* tabIndex -1 : focalisable par script seulement (lien d'evitement).
+            L'id du tabpanel (TOPIC_PANEL_ID) reste sur la carte. */}
         <main id={MAIN_ID} className="shell__main" tabIndex={-1}>
           {topicsError ? (
-            <EmptyState kind="api-error" onRetry={loadTopics} />
+            <EmptyState kind="api-error" onAction={loadTopics} />
           ) : noTopics ? (
-            <EmptyState kind="no-topics" onRetry={loadTopics} />
+            <EmptyState kind="no-topics" onAction={loadTopics} />
           ) : (
             <>
               <TopicTabs
@@ -276,12 +238,12 @@ export default function App() {
               />
               <StatTileRow
                 sensorIds={sensorIds} sensors={sensors} names={names} slots={slots} byId={byId}
-                unit={unit} decimals={meta.decimals} polarity={meta.polarity} rangeLabel={tileRangeLabel}
+                unit={unit} decimals={meta.decimals} polarity={meta.polarity} rangeLabel={deltaRangeLabel(range)}
                 selected={sensor} hovered={hoveredId} alerts={sensorAlerts} emptyKind={emptyState}
                 onToggle={toggleSensor} onHover={setHovered}
               />
               <ChartCard
-                id="main"
+                id={TOPIC_PANEL_ID}
                 title={title}
                 subtitle={subtitle}
                 hero={hero}

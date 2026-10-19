@@ -1,7 +1,3 @@
-"""Tests du consommateur Kafka (conversion des messages, archivage JSONL,
-notification du bus de records puis commit des offsets) avec un faux
-AIOKafkaConsumer."""
-
 import asyncio
 import functools
 import json
@@ -16,15 +12,15 @@ from app.data_management.data_acquisition.consumer import (
 from app.data_management.data_distribution.websocket_hub import TopicHub
 from app.data_management.record_bus import RecordBus
 from tests.conftest import (
-    Collecteur,
-    ObservateurEnPanne,
-    ObservateurEspion,
+    Collector,
+    FailingObserver,
+    SpyObserver,
     make_msg,
 )
 
 
 class TestRecordFromMsg:
-    def test_message_json(self):
+    def test_json_message(self):
         msg = make_msg(topic="t", partition=2, offset=9, timestamp=123,
                        key=b"capteur", value=b'{"node_id": "n1", "v": 1.5}')
         assert record_from_msg(msg) == {
@@ -36,25 +32,24 @@ class TestRecordFromMsg:
             "value": {"node_id": "n1", "v": 1.5},
         }
 
-    def test_message_non_json_conserve_tel_quel(self):
+    def test_non_json_message_kept_as_is(self):
         record = record_from_msg(make_msg(value=b"pas du json"))
         assert record["value"] == "pas du json"
 
-    def test_valeur_et_cle_absentes(self):
+    def test_missing_value_and_key(self):
         record = record_from_msg(make_msg(key=None, value=None))
         assert record["key"] is None
         assert record["value"] is None
 
-    def test_utf8_invalide_remplace(self):
+    def test_invalid_utf8_replaced(self):
         record = record_from_msg(make_msg(key=b"\xff", value=b"\xff"))
         assert record["key"] == "�"
         assert record["value"] == "�"
 
 
 class FakeConsumer:
-    """Imite AIOKafkaConsumer : itere sur une liste de messages fixe.
-    `journal` (optionnel, partage avec des observateurs) recoit "commit" a
-    chaque commit, pour verifier l'ordre notification / commit."""
+    """Itere sur `messages`. `journal`, partage avec des observateurs, recoit
+    "commit" a chaque commit : ordre notification / commit."""
     instances: list["FakeConsumer"] = []
     messages: list = []
     journal: list | None = None
@@ -95,12 +90,12 @@ def fake_consumer(monkeypatch):
 
 
 class TestConsumeTopic:
-    async def test_archive_publie_et_commite(self, fake_consumer, tmp_path):
+    async def test_archive_publish_and_commit(self, fake_consumer, tmp_path):
         fake_consumer.messages = [
             make_msg(topic="t", offset=0, value=b'{"node_id": "n1"}'),
             make_msg(topic="t", offset=1, value=b'{"node_id": "n2"}'),
         ]
-        received = Collecteur()
+        received = Collector()
 
         await consume_topic("t", {"group_id": "g"}, str(tmp_path / "out"),
                             received)
@@ -115,17 +110,17 @@ class TestConsumeTopic:
         lines = (tmp_path / "out" / "t.jsonl").read_text(encoding="utf-8").splitlines()
         assert [json.loads(line) for line in lines] == received.records
 
-    async def test_ajoute_au_fichier_existant(self, fake_consumer, tmp_path):
+    async def test_appends_to_existing_file(self, fake_consumer, tmp_path):
         (tmp_path / "t.jsonl").write_text('{"ancien": true}\n', encoding="utf-8")
         fake_consumer.messages = [make_msg(topic="t")]
 
-        await consume_topic("t", {}, str(tmp_path), Collecteur())
+        await consume_topic("t", {}, str(tmp_path), Collector())
 
         lines = (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"ancien": True}
 
-    async def test_consommateur_ferme_si_le_callback_echoue(self, fake_consumer,
+    async def test_consumer_closed_when_callback_fails(self, fake_consumer,
                                                              tmp_path):
         fake_consumer.messages = [make_msg(topic="t")]
 
@@ -139,22 +134,22 @@ class TestConsumeTopic:
         assert consumer.stopped
         assert consumer.commits == 0  # pas de commit d'un message non traite
 
-    async def test_commit_apres_notification_de_tous_les_observateurs(
+    async def test_commit_after_all_observers_notified(
             self, fake_consumer, tmp_path):
         journal = []
         fake_consumer.journal = journal
         fake_consumer.messages = [make_msg(topic="t", offset=0),
                                   make_msg(topic="t", offset=1)]
 
-        class Lent(ObservateurEspion):
-            """Suspend son traitement : le commit doit quand meme l'attendre."""
+        class Slow(SpyObserver):
+            """Suspend : le commit doit quand meme l'attendre."""
             async def on_record(self, topic, record, *, replay):
                 await asyncio.sleep(0)
                 await super().on_record(topic, record, replay=replay)
 
         bus = RecordBus()
-        bus.subscribe(ObservateurEspion("premier", journal))
-        bus.subscribe(Lent("lent", journal))
+        bus.subscribe(SpyObserver("premier", journal))
+        bus.subscribe(Slow("lent", journal))
 
         await consume_topic("t", {}, str(tmp_path),
                             functools.partial(bus.publish, "t"))
@@ -164,19 +159,18 @@ class TestConsumeTopic:
             ("premier", "t", 1, False), ("lent", "t", 1, False), "commit",
         ]
 
-    async def test_annulation_pendant_la_notification_sans_commit(
+    async def test_cancellation_during_notification_no_commit(
             self, fake_consumer, tmp_path):
-        """Arret du service pendant la notification : l'offset n'est pas
-        commite, le message sera relu au redemarrage (au moins une fois)."""
+        """Pas de commit : message relu au redemarrage (au moins une fois)."""
         fake_consumer.messages = [make_msg(topic="t")]
         en_cours = asyncio.Event()
 
-        async def bloquant(_record):
+        async def blocking(_record):
             en_cours.set()
             await asyncio.Event().wait()
 
         task = asyncio.create_task(
-            consume_topic("t", {}, str(tmp_path), bloquant))
+            consume_topic("t", {}, str(tmp_path), blocking))
         await en_cours.wait()
         task.cancel()
 
@@ -189,7 +183,7 @@ class TestConsumeTopic:
         lines = (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
 
-    async def test_panne_d_observateur_n_empeche_ni_commit_ni_diffusion(
+    async def test_failing_observer_blocks_neither_commit_nor_broadcast(
             self, fake_consumer, tmp_path):
         fake_consumer.messages = [make_msg(topic="t", offset=0),
                                   make_msg(topic="t", offset=1)]
@@ -197,7 +191,7 @@ class TestConsumeTopic:
         queue = hub.subscribe("t")
         bus = RecordBus()
         # L'observateur en panne est notifie AVANT le hub
-        bus.subscribe(ObservateurEnPanne())
+        bus.subscribe(FailingObserver())
         bus.subscribe(hub)
 
         await consume_topic("t", {}, str(tmp_path),

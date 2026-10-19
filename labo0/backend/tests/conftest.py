@@ -1,5 +1,4 @@
-"""Fixtures partagees par les tests du backend."""
-
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -7,9 +6,16 @@ import pytest
 from app.config import AlertsConfig, Settings, TopicConfig
 
 
+def drain(queue: asyncio.Queue) -> list:
+    items = []
+    while not queue.empty():
+        items.append(queue.get_nowait())
+    return items
+
+
 def make_msg(topic="t", partition=0, offset=0, timestamp=1000,
              key=b"k", value=b'{"node_id": "n1", "v": 1}'):
-    """Faux message Kafka (memes attributs qu'un ConsumerRecord aiokafka)."""
+    """Faux ConsumerRecord aiokafka."""
     return SimpleNamespace(topic=topic, partition=partition, offset=offset,
                            timestamp=timestamp, key=key, value=value)
 
@@ -27,9 +33,9 @@ def make_record(node_id="n1", partition=0, offset=0, timestamp_ms=1000,
     }
 
 
-def make_mesure(valeur=20.0, timestamp_ms=1000, offset=0, node_id="n1",
-                partition=0, topic="t", unit="ppm", zone="Zone A",
-                space="Salle 101"):
+def make_measurement(valeur=20.0, timestamp_ms=1000, offset=0, node_id="n1",
+                     partition=0, topic="t", unit="ppm", zone="Zone A",
+                     space="Salle 101"):
     """Record de mesure capteur complet (payload gridd avec metadonnees)."""
     metadata = {}
     if zone is not None:
@@ -47,9 +53,8 @@ def make_mesure(valeur=20.0, timestamp_ms=1000, offset=0, node_id="n1",
     }
 
 
-class Collecteur:
-    """Callback d'acquisition asynchrone (meme signature que la publication
-    sur le bus fournie par le service) : accumule les records recus."""
+class Collector:
+    """Callback publish(record) d'acquisition : accumule les records."""
 
     def __init__(self):
         self.records: list[dict] = []
@@ -58,10 +63,9 @@ class Collecteur:
         self.records.append(record)
 
 
-class ObservateurEspion:
-    """Observateur du bus de records qui journalise chaque notification sous
-    la forme (nom, topic, offset, replay). Plusieurs espions peuvent partager
-    le meme journal pour verifier l'ordre de notification."""
+class SpyObserver:
+    """Journalise chaque notification en (nom, topic, offset, replay) ; un
+    journal partage entre espions donne l'ordre de notification."""
 
     def __init__(self, nom: str = "espion", journal: list | None = None):
         self.nom = nom
@@ -71,17 +75,14 @@ class ObservateurEspion:
         self.journal.append((self.nom, topic, record.get("offset"), replay))
 
 
-class ObservateurEnPanne:
-    """Observateur dont chaque notification echoue."""
-
+class FailingObserver:
     async def on_record(self, topic: str, record: dict, *, replay: bool) -> None:
         raise RuntimeError("panne simulee")
 
 
 @pytest.fixture
 def plaintext_settings(tmp_path):
-    """Settings sans SSL/SASL et sans lecture des YAML (alertes desactivees
-    sauf si `alerts` est fourni)."""
+    """Settings sans SSL/SASL ni YAML ; alertes desactivees par defaut."""
     def _make(topic_configs=None, **overrides):
         return Settings(
             security_protocol=overrides.pop("security_protocol", "PLAINTEXT"),

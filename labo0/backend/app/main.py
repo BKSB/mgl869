@@ -1,14 +1,11 @@
-"""Composition root : construit la configuration, le hub, le service
-d'alertes, le bus de records et ses observateurs, le service et
-l'application FastAPI, puis lance le serveur. Toute la logique vit dans la
-couche service (app/services) ; les routes dans la couche API (app/api)."""
+"""Composition root : assemble les dependances et lance le serveur."""
 
-import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
 
 import uvicorn
+import yaml
 from fastapi import FastAPI
 
 from app.api.routes import router
@@ -18,10 +15,6 @@ from app.data_management.record_bus import RecordBus
 from app.services.alert_service import AlertService
 from app.services.streaming_service import StreamingService
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -29,9 +22,7 @@ def create_app(service: StreamingService, alerts: AlertService) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         service.start()
-        watchdog = asyncio.create_task(service.watch_consumers())
         yield
-        watchdog.cancel()
         await service.stop()
 
     app = FastAPI(title="gridd-kafka-consumer", lifespan=lifespan)
@@ -42,31 +33,36 @@ def create_app(service: StreamingService, alerts: AlertService) -> FastAPI:
 
 
 def create_bus(hub: TopicHub, alerts: AlertService) -> RecordBus:
-    """Patron Observateur : l'acquisition publie chaque record sur le bus,
-    qui notifie ses observateurs dans l'ordre d'inscription. Les futurs
-    observateurs (registre des capteurs, historique en base, qualite des
-    donnees) s'inscrivent ICI, sans toucher a l'acquisition."""
+    """Seul point d'inscription des observateurs, notifies dans cet ordre."""
     bus = RecordBus()
-    bus.subscribe(hub)     # diffusion WebSocket (1er : flux temps reel d'abord)
-    bus.subscribe(alerts)  # evaluation des regles d'alerte
+    bus.subscribe(hub)  # 1er : le temps reel n'attend pas les alertes
+    bus.subscribe(alerts)
     return bus
 
 
 def main() -> int:
-    settings = Settings()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
+    )
+    try:
+        settings = Settings()
+    # topics.yaml absent ou invalide : un message, pas une traceback
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        logger.error("Configuration invalide : %s", exc)
+        return 1
+    errors = settings.validate()
+    if errors:
+        for error in errors:
+            logger.error(error)
+        return 1
+
     hub = TopicHub(
         history_per_sensor={t.name: t.history_per_sensor
                             for t in settings.topic_configs},
     )
     alerts = AlertService(settings.alerts)
     service = StreamingService(settings, hub, create_bus(hub, alerts))
-
-    errors = service.validate()
-    if errors:
-        for error in errors:
-            logger.error(error)
-        return 1
-
     uvicorn.run(create_app(service, alerts), host="0.0.0.0", port=8000,
                 log_config=None)
     return 0

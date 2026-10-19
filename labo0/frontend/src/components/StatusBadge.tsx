@@ -1,18 +1,15 @@
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
 import { RECONNECT_TEXT } from '../lib/stream'
-import type { ConnectionStatus } from '../types'
+import type { ConnectionStatus, Tone } from '../types'
 
-const STATUS: Record<ConnectionStatus, { label: string; icon: IconName; tone: string }> = {
+const STATUS: Record<ConnectionStatus, { label: string; icon: IconName; tone: Tone }> = {
   live: { label: 'En direct', icon: 'radio', tone: 'good' },
   connecting: { label: 'Connexion…', icon: 'loader', tone: 'warning' },
   disconnected: { label: `Déconnecté · ${RECONNECT_TEXT}`, icon: 'alert-circle', tone: 'critical' },
 }
 
-/** Etat du flux WebSocket du topic actif : couleur + icone + libelle. Le
- * libelle est masque visuellement (sr-only) sous 720 px mais reste le contenu
- * de la region live : un changement d'etat est toujours annonce (une coupure
- * une seule fois : l'etat ne change pas a chaque tentative). */
+/** Libelle toujours rendu (contenu de la region live), masque en CSS sous 720 px. */
 export function StatusBadge({ status }: { status: ConnectionStatus }) {
   const { label, icon, tone } = STATUS[status]
   return (

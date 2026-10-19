@@ -10,7 +10,7 @@ interface Props {
   className?: string
 }
 
-/** Traces 24x24 dessines a la main (style Lucide), sans bibliotheque. */
+/** Traces 24x24 style Lucide, sans bibliotheque. */
 function paths(name: IconName) {
   switch (name) {
     case 'sun':
@@ -58,8 +58,6 @@ function paths(name: IconName) {
   }
 }
 
-/** Icone de ligne monochrome (currentColor). La coche de selection des
- * segmentes est en trait epais (2.5). */
 export function Icon({ name, size = 14, className }: Props) {
   return (
     <svg

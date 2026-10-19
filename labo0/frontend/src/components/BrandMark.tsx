@@ -1,5 +1,4 @@
-/** Marque gridd : carre arrondi (currentColor) et grille 2x2, meme dessin
- * que public/favicon.svg. */
+/** Meme dessin que public/favicon.svg. */
 export function BrandMark({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">

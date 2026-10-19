@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { DeltaText } from './DeltaText'
+import { SeriesKey } from './SeriesKey'
 import { SeverityIcon } from './SeverityIcon'
 import { Sparkline } from './Sparkline'
 import { alertText, SEVERITY_SR } from '../lib/alerts'
@@ -19,19 +20,13 @@ interface Props {
   active: boolean
   dimmed: boolean
   hovered: boolean
-  /** Alerte active du capteur (topic affiche), s'il y en a une. */
   alert?: Alert
   onToggle: (id: string) => void
   onHover: (id: string | null) => void
 }
 
-/** Tile par capteur : cle-ligne + nom, valeur, delta, sparkline. Bouton
- * bascule aria-pressed qui isole le capteur ; le nom accessible vient de
- * l'aria-label et reste stable (l'etat enfonce dit deja si le capteur est
- * isole), l'action est dans le title (description accessible). Capteur en
- * alerte : bordure 1 px couleur de statut, icone de severite (message en
- * title) ; severite et message sont dans l'aria-label, puisque le contenu
- * visuel est aria-hidden. */
+/** aria-label stable : aria-pressed dit deja si le capteur est isole, l'action
+ * est en title. Contenu visuel aria-hidden : l'alerte passe par l'aria-label. */
 export const StatTile = memo(function StatTile({
   id, name, slot, unit, decimals, stats, spark, polarity, rangeLabel, active, dimmed, hovered, alert, onToggle, onHover,
 }: Props) {
@@ -61,7 +56,7 @@ export const StatTile = memo(function StatTile({
     >
       <span aria-hidden="true" className="tile__head">
         <span className="tile__label">
-          <span className="key" style={{ background: `var(--series-${slot})` }} />
+          <SeriesKey slot={slot} />
           <span className="tile__name">{name}</span>
           {alert && (
             <span className="tile__alert" title={message}>
@@ -88,3 +83,17 @@ export const StatTile = memo(function StatTile({
     </button>
   )
 })
+
+/** Visuelle seulement : l'etat vide de la carte annonce deja la raison. */
+export function PlaceholderTile({ text }: { text: string }) {
+  return (
+    <div className="tile tile--placeholder" aria-hidden="true">
+      <span className="tile__head">
+        <span className="tile__label"><span className="key" style={{ background: 'var(--baseline)' }} /><span className="tile__name">Capteur</span></span>
+        <span className="tile__id">—</span>
+      </span>
+      <span className="tile__body"><span className="tile__value">—</span></span>
+      <span className="tile__foot"><span className="tile__none">{text}</span></span>
+    </div>
+  )
+}

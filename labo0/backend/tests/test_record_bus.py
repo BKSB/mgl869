@@ -1,23 +1,19 @@
-"""Tests du bus de records (patron Observateur) : ordre de notification,
-inscription / desinscription, isolation des pannes, propagation de
-l'annulation et transmission du drapeau replay."""
-
 import asyncio
 import logging
 
 import pytest
 
 from app.data_management.record_bus import RecordBus
-from tests.conftest import ObservateurEnPanne, ObservateurEspion, make_record
+from tests.conftest import FailingObserver, SpyObserver, make_record
 
 
-class TestInscription:
-    def test_bus_vide(self):
+class TestSubscription:
+    def test_empty_bus(self):
         assert RecordBus().observers == ()
 
-    def test_observers_dans_l_ordre_d_inscription(self):
+    def test_observers_in_subscription_order(self):
         bus = RecordBus()
-        a, b, c = ObservateurEspion("a"), ObservateurEspion("b"), ObservateurEspion("c")
+        a, b, c = SpyObserver("a"), SpyObserver("b"), SpyObserver("c")
         for observer in (b, a, c):
             bus.subscribe(observer)
 
@@ -27,15 +23,15 @@ class TestInscription:
 
     def test_subscribe_idempotent(self):
         bus = RecordBus()
-        espion = ObservateurEspion()
+        espion = SpyObserver()
         bus.subscribe(espion)
         bus.subscribe(espion)
 
         assert bus.observers == (espion,)
 
-    async def test_subscribe_idempotent_une_seule_notification(self):
+    async def test_subscribe_idempotent_single_notification(self):
         bus = RecordBus()
-        espion = ObservateurEspion()
+        espion = SpyObserver()
         bus.subscribe(espion)
         bus.subscribe(espion)
 
@@ -43,22 +39,22 @@ class TestInscription:
 
         assert espion.journal == [("espion", "t", 1, False)]
 
-    def test_observateurs_egaux_mais_distincts_inscrits_tous_deux(self):
-        class Egal(ObservateurEspion):
+    def test_equal_but_distinct_observers_both_subscribed(self):
+        class AlwaysEqual(SpyObserver):
             def __eq__(self, other):
                 return True
 
             __hash__ = None
 
         bus = RecordBus()
-        bus.subscribe(Egal("1"))
-        bus.subscribe(Egal("2"))
+        bus.subscribe(AlwaysEqual("1"))
+        bus.subscribe(AlwaysEqual("2"))
 
         assert len(bus.observers) == 2
 
     def test_unsubscribe(self):
         bus = RecordBus()
-        a, b = ObservateurEspion("a"), ObservateurEspion("b")
+        a, b = SpyObserver("a"), SpyObserver("b")
         bus.subscribe(a)
         bus.subscribe(b)
 
@@ -66,42 +62,41 @@ class TestInscription:
 
         assert bus.observers == (b,)
 
-    def test_unsubscribe_absent_sans_erreur(self):
+    def test_unsubscribe_absent_without_error(self):
         bus = RecordBus()
-        present = ObservateurEspion()
+        present = SpyObserver()
         bus.subscribe(present)
 
-        bus.unsubscribe(ObservateurEspion("absent"))
+        bus.unsubscribe(SpyObserver("absent"))
 
         assert bus.observers == (present,)
 
-    def test_inscription_journalisee(self, caplog):
+    def test_subscription_logged(self, caplog):
         with caplog.at_level(logging.INFO):
-            RecordBus().subscribe(ObservateurEspion())
-        assert "ObservateurEspion" in caplog.text
+            RecordBus().subscribe(SpyObserver())
+        assert "SpyObserver" in caplog.text
 
 
 class TestPublish:
-    async def test_publish_sans_observateur(self):
+    async def test_publish_without_observer(self):
         await RecordBus().publish("t", make_record())
 
-    async def test_notifie_dans_l_ordre_d_inscription(self):
+    async def test_notifies_in_subscription_order(self):
         journal = []
         bus = RecordBus()
         for nom in ("premier", "deuxieme", "troisieme"):
-            bus.subscribe(ObservateurEspion(nom, journal))
+            bus.subscribe(SpyObserver(nom, journal))
 
         await bus.publish("t", make_record(offset=4))
 
         assert [entree[0] for entree in journal] == ["premier", "deuxieme", "troisieme"]
         assert all(entree[1:] == ("t", 4, False) for entree in journal)
 
-    async def test_notification_sequentielle(self):
-        """Un observateur qui suspend son traitement (await) est attendu
-        jusqu'au bout avant que le suivant ne soit notifie."""
+    async def test_sequential_notification(self):
+        """Un observateur qui suspend est attendu avant le suivant."""
         journal = []
 
-        class Lent:
+        class Slow:
             async def on_record(self, topic, record, *, replay):
                 journal.append("lent:debut")
                 await asyncio.sleep(0)
@@ -109,16 +104,16 @@ class TestPublish:
                 journal.append("lent:fin")
 
         bus = RecordBus()
-        bus.subscribe(Lent())
-        bus.subscribe(ObservateurEspion("rapide", journal))
+        bus.subscribe(Slow())
+        bus.subscribe(SpyObserver("rapide", journal))
 
         await bus.publish("t", make_record(offset=0))
 
         assert journal == ["lent:debut", "lent:fin", ("rapide", "t", 0, False)]
 
-    async def test_replay_faux_par_defaut(self):
+    async def test_replay_false_by_default(self):
         bus = RecordBus()
-        espion = ObservateurEspion()
+        espion = SpyObserver()
         bus.subscribe(espion)
 
         await bus.publish("t", make_record(offset=1))
@@ -127,7 +122,7 @@ class TestPublish:
         assert espion.journal == [("espion", "t", 1, False),
                                   ("espion", "t", 2, True)]
 
-    async def test_record_transmis_tel_quel(self):
+    async def test_record_passed_as_is(self):
         recus = []
 
         class Capture:
@@ -143,20 +138,19 @@ class TestPublish:
         assert recus == [record]
         assert recus[0] is record
 
-    async def test_desinscription_pendant_la_notification(self):
-        """Un observateur qui se desinscrit pendant sa notification ne fait
-        sauter aucun des suivants (le bus itere sur une copie)."""
+    async def test_unsubscribe_during_notification(self):
+        """Le bus itere sur une copie : aucun suivant n'est saute."""
         journal = []
         bus = RecordBus()
 
-        class UneSeuleFois(ObservateurEspion):
+        class OneShot(SpyObserver):
             async def on_record(self, topic, record, *, replay):
                 await super().on_record(topic, record, replay=replay)
                 bus.unsubscribe(self)
 
-        bus.subscribe(UneSeuleFois("ephemere", journal))
-        bus.subscribe(ObservateurEspion("b", journal))
-        bus.subscribe(ObservateurEspion("c", journal))
+        bus.subscribe(OneShot("ephemere", journal))
+        bus.subscribe(SpyObserver("b", journal))
+        bus.subscribe(SpyObserver("c", journal))
 
         await bus.publish("t", make_record(offset=0))
         await bus.publish("t", make_record(offset=1))
@@ -167,19 +161,18 @@ class TestPublish:
         ]
         assert [o.nom for o in bus.observers] == ["b", "c"]
 
-    async def test_inscription_pendant_la_notification(self):
-        """Un observateur inscrit pendant une notification ne recoit que les
-        records publies apres son inscription."""
+    async def test_subscribe_during_notification(self):
+        """Ne recoit que les records publies apres son inscription."""
         journal = []
         bus = RecordBus()
-        tardif = ObservateurEspion("tardif", journal)
+        tardif = SpyObserver("tardif", journal)
 
-        class Parrain(ObservateurEspion):
+        class Referrer(SpyObserver):
             async def on_record(self, topic, record, *, replay):
                 await super().on_record(topic, record, replay=replay)
                 bus.subscribe(tardif)
 
-        bus.subscribe(Parrain("parrain", journal))
+        bus.subscribe(Referrer("parrain", journal))
 
         await bus.publish("t", make_record(offset=0))
         await bus.publish("t", make_record(offset=1))
@@ -190,13 +183,13 @@ class TestPublish:
         ]
 
 
-class TestIsolationDesPannes:
-    async def test_panne_n_empeche_pas_les_suivants(self, caplog):
+class TestFailureIsolation:
+    async def test_failure_does_not_block_next_observers(self, caplog):
         journal = []
         bus = RecordBus()
-        bus.subscribe(ObservateurEspion("avant", journal))
-        bus.subscribe(ObservateurEnPanne())
-        bus.subscribe(ObservateurEspion("apres", journal))
+        bus.subscribe(SpyObserver("avant", journal))
+        bus.subscribe(FailingObserver())
+        bus.subscribe(SpyObserver("apres", journal))
 
         with caplog.at_level(logging.ERROR):
             # publish ne leve pas malgre la panne
@@ -207,7 +200,7 @@ class TestIsolationDesPannes:
         erreurs = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert len(erreurs) == 1
         message = erreurs[0].getMessage()
-        assert "ObservateurEnPanne" in message
+        assert "FailingObserver" in message
         assert "topic.x" in message
         assert "partition=3" in message
         assert "offset=42" in message
@@ -215,11 +208,11 @@ class TestIsolationDesPannes:
         assert erreurs[0].exc_info is not None
         assert "panne simulee" in caplog.text
 
-    async def test_panne_a_chaque_record_n_arrete_pas_le_bus(self):
+    async def test_failure_on_every_record_does_not_stop_bus(self):
         journal = []
         bus = RecordBus()
-        bus.subscribe(ObservateurEnPanne())
-        bus.subscribe(ObservateurEspion("sain", journal))
+        bus.subscribe(FailingObserver())
+        bus.subscribe(SpyObserver("sain", journal))
 
         for offset in range(3):
             await bus.publish("t", make_record(offset=offset))
@@ -228,25 +221,25 @@ class TestIsolationDesPannes:
         # L'observateur en panne reste inscrit
         assert len(bus.observers) == 2
 
-    async def test_record_sans_partition_ni_offset_journalise(self, caplog):
+    async def test_record_without_partition_or_offset_logged(self, caplog):
         bus = RecordBus()
-        bus.subscribe(ObservateurEnPanne())
+        bus.subscribe(FailingObserver())
 
         with caplog.at_level(logging.ERROR):
             await bus.publish("t", {"value": "brut"})
 
         assert "partition=None offset=None" in caplog.text
 
-    async def test_annulation_propagee(self):
+    async def test_cancellation_propagated(self):
         journal = []
 
-        class Annule:
+        class Cancelling:
             async def on_record(self, topic, record, *, replay):
                 raise asyncio.CancelledError
 
         bus = RecordBus()
-        bus.subscribe(Annule())
-        bus.subscribe(ObservateurEspion("suivant", journal))
+        bus.subscribe(Cancelling())
+        bus.subscribe(SpyObserver("suivant", journal))
 
         with pytest.raises(asyncio.CancelledError):
             await bus.publish("t", make_record())
@@ -254,18 +247,17 @@ class TestIsolationDesPannes:
         # L'annulation interrompt la diffusion : rien n'est avale
         assert journal == []
 
-    async def test_annulation_de_la_tache_pendant_une_notification(self):
-        """Annuler la tache qui publie (arret du service) interrompt
-        l'observateur en cours et se propage a l'appelant."""
+    async def test_task_cancelled_during_notification(self):
+        """Arret du service : l'observateur en cours est interrompu."""
         en_cours = asyncio.Event()
 
-        class Bloquant:
+        class Blocking:
             async def on_record(self, topic, record, *, replay):
                 en_cours.set()
                 await asyncio.Event().wait()
 
         bus = RecordBus()
-        bus.subscribe(Bloquant())
+        bus.subscribe(Blocking())
         tache = asyncio.create_task(bus.publish("t", make_record()))
         await en_cours.wait()
 

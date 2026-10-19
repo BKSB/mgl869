@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { readStored, writeStored } from '../lib/storage'
 import type { ThemeMode } from '../types'
 import { useMediaQuery } from './useMediaQuery'
 
@@ -7,20 +8,12 @@ const DARK_QUERY = '(prefers-color-scheme: dark)'
 const THEME_COLOR = { light: '#f9f9f7', dark: '#0d0d0d' } as const
 
 function readStoredMode(): ThemeMode {
-  try {
-    const t = localStorage.getItem(STORAGE_KEY)
-    if (t === 'light' || t === 'dark') return t
-  } catch {
-    // stockage indisponible (navigation privee, politique) : mode systeme
-  }
-  return 'system'
+  const t = readStored(STORAGE_KEY)
+  return t === 'light' || t === 'dark' ? t : 'system'
 }
 
-/**
- * Bascule Systeme / Clair / Sombre : pose data-theme sur <html>, persiste le
- * choix et tient a jour meta[name=theme-color]. Le script inline d'index.html
- * applique le meme attribut avant le premier rendu (aucun flash).
- */
+/** data-theme sur <html> et meta theme-color. Le script inline d'index.html fait
+ * de meme avant le premier rendu (meme cle, memes couleurs) : aucun flash. */
 export function useTheme(): {
   mode: ThemeMode
   resolved: 'light' | 'dark'
@@ -34,12 +27,7 @@ export function useTheme(): {
     const el = document.documentElement
     if (mode === 'system') delete el.dataset.theme
     else el.dataset.theme = mode
-    try {
-      if (mode === 'system') localStorage.removeItem(STORAGE_KEY)
-      else localStorage.setItem(STORAGE_KEY, mode)
-    } catch {
-      // stockage indisponible : le choix vaut pour la session
-    }
+    writeStored(STORAGE_KEY, mode === 'system' ? null : mode)
   }, [mode])
 
   useEffect(() => {

@@ -1,32 +1,37 @@
-/** Metadonnees d'affichage par topic : libelle court (onglets etroits),
- * polarite (sens d'une hausse), decimales et description. labels.ts reste la
- * source des libelles longs. */
+/** Metadonnees d'affichage : seule table des topics cote dashboard. */
 
-import { topicLabel } from './labels'
 import type { Polarity } from '../types'
 
 export interface TopicMeta {
+  label: string
   shortLabel: string
   polarity: Polarity
   decimals: number
-  description: string
 }
 
 const TOPIC_META: Record<string, TopicMeta> = {
-  'gridd.obs.environmental.temperature': { shortLabel: 'Temp.', polarity: 'neutral', decimals: 1, description: 'Température ambiante' },
-  'gridd.obs.environmental.humidity': { shortLabel: 'Hum.', polarity: 'neutral', decimals: 0, description: 'Humidité relative' },
-  'gridd.obs.environmental.co2': { shortLabel: 'CO₂', polarity: 'lower-better', decimals: 0, description: 'Concentration de CO₂' },
-  'gridd.obs.acoustic.sound_level': { shortLabel: 'Bruit', polarity: 'lower-better', decimals: 1, description: 'Niveau sonore' },
-  'gridd.obs.occupancy.count': { shortLabel: 'Occ.', polarity: 'neutral', decimals: 0, description: 'Personnes présentes' },
+  'gridd.obs.environmental.temperature': { label: 'Température', shortLabel: 'Temp.', polarity: 'neutral', decimals: 1 },
+  'gridd.obs.environmental.humidity': { label: 'Humidité', shortLabel: 'Hum.', polarity: 'neutral', decimals: 0 },
+  'gridd.obs.environmental.co2': { label: 'CO₂', shortLabel: 'CO₂', polarity: 'lower-better', decimals: 0 },
+  'gridd.obs.acoustic.sound_level': { label: 'Niveau sonore', shortLabel: 'Bruit', polarity: 'lower-better', decimals: 1 },
+  'gridd.obs.occupancy.count': { label: 'Occupation', shortLabel: 'Occ.', polarity: 'neutral', decimals: 0 },
 }
 
-/** Metadonnees du topic, avec repli neutre pour un topic inconnu. */
+/** Topic inconnu : dernier segment capitalise, comme le backend (« Wind speed »). */
+function fallbackLabel(name: string): string {
+  const last = name.split('.').slice(-1)[0].replace(/_/g, ' ')
+  return last.charAt(0).toUpperCase() + last.slice(1)
+}
+
 export function getTopicMeta(name: string | null): TopicMeta {
   if (name !== null) {
     const meta = TOPIC_META[name]
     if (meta) return meta
   }
-  return { shortLabel: name ? topicLabel(name) : '', polarity: 'neutral', decimals: 1, description: '' }
+  const label = name ? fallbackLabel(name) : ''
+  return { label, shortLabel: label, polarity: 'neutral', decimals: 1 }
 }
+
+export const topicLabel = (name: string): string => getTopicMeta(name).label
 
 export const topicShortLabel = (name: string): string => getTopicMeta(name).shortLabel

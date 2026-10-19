@@ -1,4 +1,4 @@
-/** Message Kafka tel que diffuse par le backend sur /ws/<topic>. */
+/** Message Kafka diffuse par le backend sur /ws/<topic>. */
 export interface TopicRecord {
   topic: string
   partition: number
@@ -6,8 +6,8 @@ export interface TopicRecord {
   timestamp_ms: number
   key: string | null
   value: SensorValue | string | null
-  /** Identifiant du capteur calcule par le backend (node_id, sinon cle
-   * Kafka, sinon « _sans_node_id ») : le meme que le node_id des alertes. */
+  /** Calcule par le backend : node_id, sinon cle Kafka, sinon « _sans_node_id ».
+   * Meme valeur que Alert.node_id. */
   sensor_id: string
 }
 
@@ -31,13 +31,12 @@ export interface TopicInfo {
   websocket: string
 }
 
-/** Point de serie temporelle d'un capteur. */
 export interface SensorPoint {
   t: number
   v: number
 }
 
-/** Etat d'un capteur : ses derniers points + le dernier message recu. */
+/** last : dernier payload recu (unite, metadonnees). */
 export interface SensorSeries {
   points: SensorPoint[]
   last: SensorValue
@@ -45,13 +44,16 @@ export interface SensorSeries {
 
 export type ConnectionStatus = 'connecting' | 'live' | 'disconnected'
 
-/** Reponse de GET /health : etat global + un booleen par consommateur Kafka. */
+/** Classe badge--<tone> : couleur de l'icone d'un badge d'etat. */
+export type Tone = 'good' | 'warning' | 'critical' | 'muted'
+
+/** Reponse de GET /health : un booleen par consommateur Kafka. */
 export interface HealthInfo {
   status: 'ok' | 'degraded'
   consumers: Record<string, boolean>
 }
 
-/** Statistiques d'une serie sur la plage affichee (une passe sur les points). */
+/** Statistiques d'une serie sur la plage affichee. */
 export interface SeriesStats {
   count: number
   first: number
@@ -69,7 +71,7 @@ export interface SeriesStats {
 export type Freshness = 'fresh' | 'late' | 'stale'
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type ViewMode = 'chart' | 'table'
-/** Sens de lecture d'une hausse : neutre, ou « plus bas = mieux » (CO2, bruit). */
+/** Sens d'une hausse : neutre, ou « plus bas = mieux » (CO2, bruit). */
 export type Polarity = 'neutral' | 'lower-better'
 
 /** Ligne large du graphe/tableau : t + une colonne par node_id. */
@@ -78,13 +80,12 @@ export interface ChartRow {
   [sensorId: string]: number
 }
 
-/** Severite d'une alerte (regles du backend, config/alerts.yaml). */
+/** Cf. regles du backend (config/alerts.yaml). */
 export type AlertSeverity = 'warning' | 'critical'
-/** Sens de la regle : alerte au-dessus ou en dessous du seuil. */
 export type AlertDirection = 'above' | 'below'
 export type AlertEventKind = 'raised' | 'escalated' | 'deescalated' | 'resolved'
 
-/** Alerte active d'un capteur (une au plus par topic et capteur). */
+/** Alerte active : une au plus par topic et capteur. */
 export interface Alert {
   /** « <topic>|<node_id> » */
   id: string
@@ -104,22 +105,18 @@ export interface Alert {
   since_ms: number
   /** Derniere mesure evaluee. */
   updated_ms: number
-  /** Message du backend (journaux, autres clients de l'API). Le dashboard
-   * compose le sien avec les decimales du topic : lib/alerts (alertText). */
+  /** Pour les journaux et autres clients : le dashboard compose le sien (alertText). */
   message: string
 }
 
-/** Changement de niveau d'une alerte. Pour « resolved », `alert` est l'etat
- * juste avant la resolution : seules `value` et `updated_ms` sont celles de
- * la mesure qui resout. Le texte de retour a la normale est compose par
- * lib/alerts (resolutionText). */
+/** Pour « resolved », `alert` est l'etat juste avant la resolution, sauf
+ * `value` et `updated_ms` : ceux de la mesure qui resout. */
 export interface AlertEvent {
   kind: AlertEventKind
   at_ms: number
   alert: Alert
 }
 
-/** Regle d'un topic : seuil franchi dans une direction, avec hysteresis. */
 export interface AlertRule {
   severity: AlertSeverity
   direction: AlertDirection
@@ -137,11 +134,10 @@ export interface AlertsSnapshot {
   rules: Record<string, AlertRule[]>
 }
 
-/** Message du WebSocket /ws/alerts : snapshot a la connexion, puis evenements. */
+/** /ws/alerts : snapshot a la connexion, puis evenements. */
 export type AlertsMessage =
   | { type: 'snapshot'; active: Alert[] }
   | { type: 'event'; event: AlertEvent }
 
-/** Etat du flux des alertes ; « disabled » : aucune regle cote backend ;
- * « disconnected » : coupure, dernier etat connu affiche sans confirmation. */
+/** « disabled » : aucune regle cote backend ; « disconnected » : dernier etat connu, non confirme. */
 export type AlertsStatus = 'connecting' | 'live' | 'disconnected' | 'disabled'

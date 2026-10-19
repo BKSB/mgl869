@@ -2,11 +2,10 @@ import { useMemo } from 'react'
 import type { ChartRow, SensorPoint, SensorSeries, SeriesStats } from '../types'
 import type { TimeRange } from '../lib/ranges'
 import {
-  anchorTime, medianInterval, mergeSeries, normalizePoints, seriesStats, sparkline, windowPoints,
+  anchorTime, DEFAULT_PERIOD_MS, medianInterval, mergeSeries, normalizePoints, seriesStats, sparkline, windowPoints,
 } from '../lib/stats'
 
-/** Derives d'un capteur sur la plage : points fenetres, stats, sparkline et
- * periode d'emission (estimee sur l'historique complet). */
+/** Derives d'un capteur sur la plage ; period est estimee sur tout l'historique. */
 export interface SensorDerived {
   /** Points reels de la fenetre (tries, dedoublonnes). */
   pts: SensorPoint[]
@@ -17,14 +16,10 @@ export interface SensorDerived {
   lastT: number | undefined
 }
 
-/**
- * Statistiques memoisees par capteur + lignes larges fusionnees pour le graphe
- * et le tableau. `now` n'entre dans aucun memo : la fraicheur est calculee a
- * l'affichage. `sensors` ne change de reference qu'au flush d'un lot non vide,
- * donc `rows` garde sa reference entre deux messages. Les series sont
- * normalisees (tri, doublons) : useTopicStream ajoute les points dans l'ordre
- * de reception, et un rejeu apres reconnexion les duplique.
- */
+/** Stats memoisees par capteur + lignes larges du graphe et du tableau. `now` n'entre
+ * dans aucun memo (fraicheur calculee a l'affichage) ; `sensors` ne change qu'au flush
+ * d'un lot non vide, donc `rows` reste stable entre deux messages. Series normalisees :
+ * useTopicStream ne trie pas, et un rejeu apres reconnexion duplique les points. */
 export function useSeriesStats(
   sensors: Record<string, SensorSeries>,
   ids: string[],
@@ -35,13 +30,12 @@ export function useSeriesStats(
   byId: Record<string, SensorDerived>
   totalPoints: number
   rows: ChartRow[]
-  /** Fraicheur des capteurs affiches (shownIds) : dernier point recu et plus
-   * longue periode d'emission. Un capteur isole a la sienne, pas celle des
-   * autres capteurs du topic. */
+  /** Premiere mesure de la fenetre parmi les capteurs affiches (duree montree). */
+  firstT: number | undefined
+  /** Avec period : fraicheur des capteurs affiches ; un capteur isole a la sienne. */
   lastT: number | undefined
   period: number
-  /** Largeur de la fenetre d'une ligne fusionnee (ms, voir rowEnd) :
-   * max(1 s, periode min / 2) arrondie a la seconde entiere. */
+  /** Fenetre d'une ligne fusionnee (ms, cf. rowEnd) : demi-periode min, 1 s au moins. */
   bucket: number
 } {
   const base = useMemo(() => {
@@ -56,7 +50,7 @@ export function useSeriesStats(
       periods[id] = p
       if (p < minPeriod) minPeriod = p
     }
-    const half = (Number.isFinite(minPeriod) ? minPeriod : 60_000) / 2
+    const half = (Number.isFinite(minPeriod) ? minPeriod : DEFAULT_PERIOD_MS) / 2
     const bucket = Math.max(1000, Math.round(half / 1000) * 1000)
     const anchorT = anchorTime(clean)
     // Passe 2 : fenetre, stats, sparkline
@@ -79,6 +73,7 @@ export function useSeriesStats(
     const src: Record<string, SensorPoint[]> = {}
     const present: string[] = []
     let totalPoints = 0
+    let firstT: number | undefined
     let lastT: number | undefined
     let period = 0
     for (const id of shownIds) {
@@ -87,16 +82,20 @@ export function useSeriesStats(
       src[id] = d.pts
       present.push(id)
       totalPoints += d.pts.length
+      const first = d.stats?.firstT
+      if (first !== undefined && (firstT === undefined || first < firstT)) firstT = first
       if (d.lastT !== undefined && (lastT === undefined || d.lastT > lastT)) lastT = d.lastT
       if (d.period > period) period = d.period
     }
-    // Lignes regroupees par seau, horodatees a la mesure reelle la plus ancienne
-    return { rows: mergeSeries(src, present, base.bucket), totalPoints, lastT, period: period || 60_000 }
+    return {
+      rows: mergeSeries(src, present, base.bucket), totalPoints, firstT, lastT, period: period || DEFAULT_PERIOD_MS,
+    }
   }, [base.byId, base.bucket, shownIds])
 
   return {
     anchorT: base.anchorT,
     byId: base.byId,
+    firstT: shown.firstT,
     lastT: shown.lastT,
     period: shown.period,
     bucket: base.bucket,

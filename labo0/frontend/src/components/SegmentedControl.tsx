@@ -2,8 +2,9 @@ import { useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Icon } from './Icon'
 import type { IconName } from './Icon'
+import { rovingIndex } from '../lib/roving'
 
-export interface SegmentOption<T extends string> {
+export interface SegmentOption<T extends string | number> {
   value: T
   label: string
   icon?: IconName
@@ -11,7 +12,7 @@ export interface SegmentOption<T extends string> {
   iconOnly?: boolean
 }
 
-interface Props<T extends string> {
+interface Props<T extends string | number> {
   options: SegmentOption<T>[]
   value: T
   onChange: (v: T) => void
@@ -22,24 +23,15 @@ interface Props<T extends string> {
   disabled?: boolean
 }
 
-/** Groupe radio segmente (roving tabindex : fleches, Home, End). `disabled`
- * est propage a chaque bouton : hors de l'ordre de tabulation et inactif au
- * clavier comme a la souris. */
-export function SegmentedControl<T extends string>({
+/** `disabled` sur chaque bouton : le CSS du groupe ne bloque que la souris. */
+export function SegmentedControl<T extends string | number>({
   options, value, onChange, ariaLabel, size = 'md', grow = false, showCheck = false, disabled = false,
 }: Props<T>) {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
-    const n = options.length
-    let next: number
-    switch (e.key) {
-      case 'ArrowLeft': case 'ArrowUp': next = (i - 1 + n) % n; break
-      case 'ArrowRight': case 'ArrowDown': next = (i + 1) % n; break
-      case 'Home': next = 0; break
-      case 'End': next = n - 1; break
-      default: return
-    }
+    const next = rovingIndex(e.key, i, options.length)
+    if (next === null) return
     e.preventDefault()
     onChange(options[next].value)
     refs.current[next]?.focus()

@@ -1,12 +1,14 @@
-/** Statistiques pures derivees des series (sans React) : fenetre, min/max,
- * sparkline, fusion k-voies et fraicheur. Testables isolement. */
+/** Statistiques pures des series (sans React). */
 
 import type { ChartRow, Freshness, SensorPoint, SeriesStats } from '../types'
 import type { TimeRange } from './ranges'
+import { MINUTE } from './time'
 
-/** Horloge de reference : le dernier point de toutes les series (triees,
- * voir normalizePoints) ; la fenetre est ancree sur les capteurs, pas sur
- * Date.now(). 0 si vide. */
+/** Periode d'emission supposee tant que la serie est trop courte pour la mesurer. */
+export const DEFAULT_PERIOD_MS = MINUTE
+
+/** Dernier t de toutes les series (triees) : la fenetre est ancree sur les
+ * capteurs, pas sur Date.now(). */
 export function anchorTime(series: Record<string, SensorPoint[]>): number {
   let max = 0
   for (const id in series) {
@@ -17,12 +19,8 @@ export function anchorTime(series: Record<string, SensorPoint[]>): number {
   return max
 }
 
-/**
- * Serie strictement croissante en t, sans doublon. Une passe O(n) quand la
- * serie est deja propre (meme reference renvoyee) ; sinon copie triee puis
- * dedoublonnee en gardant le dernier point d'un meme t (rejeu de l'historique
- * apres reconnexion : memes valeurs). useTopicStream ne trie pas.
- */
+/** Strictement croissante en t. Deja propre : meme reference ; sinon copie triee,
+ * le dernier point d'un meme t gagnant (rejeu apres reconnexion). */
 export function normalizePoints(points: SensorPoint[]): SensorPoint[] {
   let clean = true
   for (let i = 1; i < points.length; i++) {
@@ -38,19 +36,14 @@ export function normalizePoints(points: SensorPoint[]): SensorPoint[] {
   return out
 }
 
-/**
- * Borne exclusive de la fenetre d'une ligne fusionnee qui commence a t :
- * [t, t + bucket). Les capteurs d'un meme topic n'emettent jamais a la meme
- * milliseconde ; la fenetre est ANCREE sur la premiere mesure reelle de la
- * ligne (pas une grille fixe : une frontiere de grille couperait un groupe
- * de capteurs en deux lignes). Sans seau (bucket <= 0), la ligne ne couvre
- * que l'instant t (horodatages en ms entieres).
- */
+/** Fin exclusive de la ligne [t, t + bucket) : les capteurs n'emettent jamais a la
+ * meme ms. Ancree sur sa premiere mesure, pas sur une grille fixe qui couperait un
+ * groupe en deux ; bucket <= 0 : t seul (ms entieres). */
 export function rowEnd(t: number, bucket: number): number {
   return t + (bucket > 0 ? bucket : 1)
 }
 
-/** Index du premier point dont t >= cutoff (recherche binaire, points tries). */
+/** Premier index avec t >= cutoff ; points tries. */
 export function cutoffIndex(points: SensorPoint[], cutoff: number): number {
   let lo = 0
   let hi = points.length
@@ -62,13 +55,12 @@ export function cutoffIndex(points: SensorPoint[], cutoff: number): number {
   return lo
 }
 
-/** Points de la fenetre ; 'all' renvoie le tableau d'origine (meme reference). */
+/** 'all' : tableau d'origine (meme reference). */
 export function windowPoints(points: SensorPoint[], range: TimeRange, anchorT: number): SensorPoint[] {
   if (range === 'all') return points
   return points.slice(cutoffIndex(points, anchorT - range))
 }
 
-/** Une passe sur la fenetre ; null si elle est vide. */
 export function seriesStats(pts: SensorPoint[]): SeriesStats | null {
   const n = pts.length
   if (n === 0) return null
@@ -94,8 +86,7 @@ export function seriesStats(pts: SensorPoint[]): SeriesStats | null {
   }
 }
 
-/** Moyenne par seau temporel (12 par defaut) ; seau vide = valeur du seau
- * precedent, les premiers seaux vides prennent la premiere valeur connue. */
+/** Moyenne par seau temporel ; seau vide : valeur precedente, ou premiere connue. */
 export function sparkline(pts: SensorPoint[], buckets = 12): number[] {
   const n = pts.length
   if (n < 2) return []
@@ -123,15 +114,10 @@ export function sparkline(pts: SensorPoint[], buckets = 12): number[] {
   return out
 }
 
-/**
- * Fusion k-voies de series triees : une ligne par fenetre [tMin, rowEnd), une
- * colonne par capteur. row.t = tMin est l'horodatage REEL de la plus ancienne
- * mesure de la ligne, jamais une valeur arrondie : tableau, CSV et infobulle
- * affichent l'heure d'une vraie mesure. Les points non pris ont tous
- * t >= rowEnd : les lignes sont strictement croissantes et espacees d'au
- * moins un seau. Deux points d'une meme serie dans la fenetre : le dernier
- * gagne. O(N*k), aucun tri global, aucun objet intermediaire.
- */
+/** Fusion k-voies de series triees, une ligne par fenetre [tMin, rowEnd). row.t est
+ * l'horodatage reel de la plus ancienne mesure, jamais arrondi : tableau, CSV et
+ * infobulle l'affichent. Lignes espacees d'au moins un seau ; dans une fenetre, le
+ * dernier point d'une serie gagne. O(N*k). */
 export function mergeSeries(byId: Record<string, SensorPoint[]>, ids: string[], bucket = 0): ChartRow[] {
   const k = ids.length
   if (k === 0) return []
@@ -159,11 +145,10 @@ export function mergeSeries(byId: Record<string, SensorPoint[]>, ids: string[], 
   return rows
 }
 
-/** Periode d'emission estimee : mediane des k derniers intervalles (60 s par
- * defaut quand la serie est trop courte). */
+/** Periode d'emission : mediane des k derniers intervalles. */
 export function medianInterval(pts: SensorPoint[], k = 20): number {
   const n = pts.length
-  if (n < 3) return 60_000
+  if (n < 3) return DEFAULT_PERIOD_MS
   const m = Math.min(k, n - 1)
   const deltas: number[] = []
   for (let i = n - m; i < n; i++) deltas.push(pts[i].t - pts[i - 1].t)
@@ -172,8 +157,7 @@ export function medianInterval(pts: SensorPoint[], k = 20): number {
   return deltas.length % 2 === 1 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2
 }
 
-/** Fraicheur d'une mesure selon son age et la periode du capteur. Planchers
- * de 30 s / 120 s : la gigue reseau sur les capteurs a 6 s ne doit pas alerter. */
+/** Planchers de 30 s / 120 s : la gigue reseau des capteurs a 6 s ne doit pas alerter. */
 export function freshness(ageMs: number, periodMs: number): Freshness {
   if (ageMs <= Math.max(2 * periodMs, 30_000)) return 'fresh'
   if (ageMs <= Math.max(5 * periodMs, 120_000)) return 'late'

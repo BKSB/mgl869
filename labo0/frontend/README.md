@@ -14,6 +14,7 @@ npm ci            # dépendances (une seule police bundlée : @fontsource-variab
 npm run dev       # http://localhost:5173, proxy /api, /health et /ws vers :8000
 npm run build     # tsc -b && vite build -> dist/
 npm run lint      # oxlint
+npm test          # vitest : fonctions pures de src/lib (*.test.ts)
 ```
 
 Docker : l'image construit `dist/` puis le sert avec nginx (`nginx.conf` relaie `/api/`, `/health` et `/ws/` vers le service backend du `docker-compose`, et met en cache long les assets hachés).
@@ -24,8 +25,8 @@ Docker : l'image construit `dist/` puis le sert avec nginx (`nginx.conf` relaie 
 |---|---|
 | `api/` | Appels réseau : `fetchTopics`, `fetchHealth` et `fetchAlerts` (un seul `getJson`, content-type vérifié), `wsUrl` (topics et alertes) |
 | `hooks/` | `useTopicStream` (un WebSocket par topic, état étiqueté par topic, capteurs groupés par le `sensor_id` du backend, lots intégrés toutes les 500 ms), `useSeriesStats` (fenêtre, stats, sparkline, fusion k-voies, mémoïsés), `useHealth` (polling 30 s, délai de 10 s par requête, pause onglet caché), `useAlerts` (GET puis WebSocket des alertes, reconnexion 3 s), `useNow` (ticker partagé 5 s), `useTheme`, `useMediaQuery`, `useKeyboardShortcuts` |
-| `lib/` | Fonctions pures : `stats` (fenêtre ancrée sur l'horloge des capteurs, `medianInterval`, `freshness`), `format` (fr-CA : virgule décimale, espace fine, `HH:mm:ss`), `ranges`, `metrics` (libellé court, polarité, décimales par topic), `alerts` (tri, application d'un événement, textes des alertes), `stream` (délai de reconnexion, états d'attente du flux), `focus` (focus conservé quand une action démonte le bouton focalisé), `csv`, `labels`, `sensors` |
-| `components/` | `AppBar`, `TopicTabs`, `FilterBar` (plage, capteur, vue), `StatTileRow`/`StatTile`, `ChartCard`, `TopicChart` + `ChartTooltip`, `LegendTable`, `DataTable`, `AlertsChip` + `AlertsPanel`, `SeverityIcon`, badges d'état |
+| `lib/` | Fonctions pures, la plupart testées par Vitest (`*.test.ts` à côté) : `stats` (fenêtre ancrée sur l'horloge des capteurs, `medianInterval`, `freshness`), `format` (fr-CA : virgule décimale, espace fine, `HH:mm:ss`, accord `plural`), `ranges` (plages et leurs libellés), `metrics` (seule table des topics : libellé, libellé court, polarité, décimales), `alerts` (tri, application d'un événement, textes des alertes), `stream` (intégration des records en séries, délai de reconnexion, états d'attente du flux), `focus` (focus conservé quand une action démonte le bouton focalisé), `roving` (navigation aux flèches des groupes radio et des onglets), `storage` (localStorage sans exception), `time` (durées), `csv`, `sensors` |
+| `components/` | `AppBar`, `TopicTabs`, `FilterBar` (plage, capteur, vue), `StatTileRow`/`StatTile`, `ChartCard`, `TopicChart` + `ChartTooltip`, `LegendTable`, `DataTable`, `AlertsChip` + `AlertsPanel`, `SeverityIcon`, `SeriesKey` (pastille de série), badges d'état |
 
 Un seul WebSocket par topic, les stats sont dérivées et mémoïsées côté client. Une coupure reste affichée (« Déconnecté · reconnexion toutes les 3 s », bandeau de la carte) pendant toutes les tentatives, sans clignoter ni être ré-annoncée à chaque essai ; au chargement, l'état est « Connexion… », jamais une fausse coupure. `/health` est interrogé toutes les 30 s pour l'état du service et de chaque consommateur Kafka (point sur l'onglet du topic concerné) ; une requête sans réponse après 10 s compte comme un échec (« injoignable » après deux échecs).
 
@@ -55,7 +56,7 @@ Les règles (seuils, hystérésis) vivent côté backend dans `backend/config/al
 
 ## Méthode dataviz
 
-- Palette validée (8 slots catégoriels, variantes claires et sombres) ; la couleur suit le capteur (ordre alphabétique des `node_id`), jamais sa position dans le filtre.
+- Palette validée (8 slots catégoriels, variantes claires et sombres) ; la couleur suit le capteur (tri naturel des `node_id` : `n2` avant `n10`), jamais sa position dans le filtre.
 - Le texte ne porte jamais une couleur de série ni de statut : identité par clé-ligne, statut par couleur + icône + libellé.
 - Lignes 2 px, grille et curseur en hairlines solides, aucune animation sur les données, cadre stable au changement de topic (tiles « — », état « Rejeu de l'historique… »).
 - Une seule rangée de filtres (plage d'abord) qui scope tiles, graphe, légende et tableau à l'identique ; vue tableau jumelle avec export CSV (Excel fr-CA).

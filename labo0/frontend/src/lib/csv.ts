@@ -3,17 +3,14 @@
 import type { ChartRow } from '../types'
 import { fmtDateTime, roundsToZero } from './format'
 
-/** Champ texte : guillemets doubles s'il contient ; " ou un retour a la
- * ligne. Un champ qui commence par = + - @, une tabulation ou un retour est
- * prefixe d'une apostrophe : Excel l'evaluerait sinon comme une formule
- * (libelle de capteur venu de Kafka : « -1 Sous-sol », « =HYPERLINK(…) »). */
+/** Apostrophe devant = + - @, tabulation ou retour en tete, sinon Excel evalue
+ * une formule (libelles Kafka : « -1 Sous-sol », « =HYPERLINK(…) »). */
 function textField(s: string): string {
   const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s
   return /[;"\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
 }
 
-/** Valeur numerique, virgule decimale ; une valeur qui s'arrondit a zero
- * s'ecrit « 0,0 » comme dans le tableau, jamais « -0,0 ». */
+/** Jamais « -0,0 », comme dans le tableau. */
 const numberField = (v: number, decimals: number) =>
   (roundsToZero(v, decimals) ? 0 : v).toFixed(decimals).replace('.', ',')
 
@@ -28,7 +25,7 @@ export function toCsv(
   names: Record<string, string>,
   decimals: number,
 ): string {
-  const head = ['horodatage', ...ids.map((id) => textField(`${names[id] ?? id} (${id})`))].join(';')
+  const head = ['horodatage', ...ids.map((id) => textField(`${names[id]} (${id})`))].join(';')
   const lines = rows.map((row) => {
     const cells = ids.map((id) => {
       const v = row[id]
@@ -39,7 +36,6 @@ export function toCsv(
   return `\uFEFF${[head, ...lines].join('\r\n')}\r\n`
 }
 
-/** Declenche le telechargement d'un texte via un lien temporaire. */
 export function downloadText(filename: string, text: string, mime = 'text/csv;charset=utf-8'): void {
   const url = URL.createObjectURL(new Blob([text], { type: mime }))
   const a = document.createElement('a')

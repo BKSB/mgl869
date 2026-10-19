@@ -2,38 +2,31 @@ import { useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Icon } from './Icon'
 import { SeverityIcon } from './SeverityIcon'
-import { alertCount, highestSeverity } from '../lib/alerts'
-import { topicLabel } from '../lib/labels'
-import { topicShortLabel } from '../lib/metrics'
+import { highestSeverity } from '../lib/alerts'
+import { plural } from '../lib/format'
+import { topicLabel, topicShortLabel } from '../lib/metrics'
+import { rovingIndex } from '../lib/roving'
 import type { Alert, TopicInfo } from '../types'
+
+/** id du tabpanel : la carte du topic (ChartCard, rendue par App). */
+export const TOPIC_PANEL_ID = 'main'
 
 interface Props {
   topics: TopicInfo[]
   selected: string | null
   onSelect: (name: string) => void
   consumers?: Record<string, boolean>
-  /** Alertes actives d'un topic (indicateur sur l'onglet). */
   alertsByTopic?: (topic: string) => Alert[]
 }
 
-/** Onglets de topic (role tablist, activation automatique aux fleches).
- * Libelle court sous 720 px ; point + icone si le consommateur est arrete ;
- * icone de severite (12 px) + « n alertes » en sr-only si le topic a des
- * alertes actives. */
+/** Activation automatique : les fleches selectionnent le topic. */
 export function TopicTabs({ topics, selected, onSelect, consumers, alertsByTopic }: Props) {
   const refs = useRef<(HTMLButtonElement | null)[]>([])
   if (topics.length === 0) return null
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
-    const n = topics.length
-    let next: number
-    switch (e.key) {
-      case 'ArrowLeft': next = (i - 1 + n) % n; break
-      case 'ArrowRight': next = (i + 1) % n; break
-      case 'Home': next = 0; break
-      case 'End': next = n - 1; break
-      default: return
-    }
+    const next = rovingIndex(e.key, i, topics.length, { vertical: false })
+    if (next === null) return
     e.preventDefault()
     onSelect(topics[next].name)
     refs.current[next]?.focus()
@@ -49,7 +42,7 @@ export function TopicTabs({ topics, selected, onSelect, consumers, alertsByTopic
           const severity = highestSeverity(tabAlerts)
           const titles = [
             stopped ? 'Consommateur Kafka arrêté' : '',
-            severity ? `${alertCount(tabAlerts.length)} active${tabAlerts.length > 1 ? 's' : ''}` : '',
+            severity ? plural(tabAlerts.length, 'alerte active', 'alertes actives') : '',
           ].filter(Boolean)
           return (
             <button
@@ -59,15 +52,14 @@ export function TopicTabs({ topics, selected, onSelect, consumers, alertsByTopic
               role="tab"
               id={`tab-${name}`}
               aria-selected={active}
-              aria-controls="main"
+              aria-controls={TOPIC_PANEL_ID}
               tabIndex={active ? 0 : -1}
               title={titles.length > 0 ? titles.join(' · ') : undefined}
               className="tab"
               onClick={() => onSelect(name)}
               onKeyDown={(e) => onKeyDown(e, i)}
             >
-              {/* Nom accessible : toujours le libelle long ; l'abreviation
-                  (< 720 px) n'est que visuelle */}
+              {/* Nom accessible : le libelle long ; l'abreviation est visuelle seulement */}
               <span className="tabs__long">{topicLabel(name)}</span>
               <span className="tabs__short" aria-hidden="true">{topicShortLabel(name)}</span>
               {stopped && (
@@ -80,7 +72,7 @@ export function TopicTabs({ topics, selected, onSelect, consumers, alertsByTopic
               {severity && (
                 <>
                   <SeverityIcon severity={severity} size={12} className="tab__alert" />
-                  <span className="sr-only">, {alertCount(tabAlerts.length)}</span>
+                  <span className="sr-only">, {plural(tabAlerts.length, 'alerte')}</span>
                 </>
               )}
             </button>

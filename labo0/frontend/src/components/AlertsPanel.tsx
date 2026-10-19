@@ -3,18 +3,16 @@ import { SeverityIcon } from './SeverityIcon'
 import { useNow } from '../hooks/useNow'
 import { alertPlace, alertText, eventKey, eventLabel, eventText, SEVERITY_LABEL } from '../lib/alerts'
 import { fmtAge, fmtDateTime, fmtDayTime, fmtTime } from '../lib/format'
-import { topicLabel } from '../lib/labels'
+import { topicLabel } from '../lib/metrics'
 import { RECONNECT_TEXT } from '../lib/stream'
+import { DAY } from '../lib/time'
 import type { Alert, AlertEvent, AlertsStatus } from '../types'
 
-/** Evenements montres dans « Récemment ». */
 const RECENT_SHOWN = 10
-const ONE_DAY = 24 * 60 * 60_000
 
 interface Props {
   titleId: string
-  /** GET /api/alerts a repondu au moins une fois : sinon l'etat est inconnu
-   * (jamais « Aucune alerte » par defaut). */
+  /** GET /api/alerts a repondu ; sinon etat inconnu, jamais « Aucune alerte ». */
   loaded: boolean
   status: AlertsStatus
   active: Alert[]
@@ -23,8 +21,7 @@ interface Props {
   onClose: () => void
 }
 
-/** Heure de debut : avec la date si elle remonte a plus de 24 h. */
-const startLabel = (t: number, now: number) => (now - t > ONE_DAY ? fmtDayTime(t) : fmtTime(t, false))
+const startLabel = (t: number, now: number) => (now - t > DAY ? fmtDayTime(t) : fmtTime(t, false))
 
 function ActiveRow({ alert, now, onShow }: { alert: Alert; now: number; onShow: (a: Alert) => void }) {
   const topic = topicLabel(alert.topic)
@@ -69,7 +66,7 @@ function RecentRow({ event, now }: { event: AlertEvent; now: number }) {
       <div className="event-row__main">
         <p className="event-row__title">
           <strong>{eventLabel(event.kind, event.alert.severity)}</strong>
-          {/* Le texte nomme deja le topic (« CO₂ de nouveau sous… ») */}
+          {/* Pas de topic : eventText le nomme deja */}
           <span className="event-row__ctx"> · <span className="nowrap">{alertPlace(event.alert)}</span></span>
         </p>
         <p className="event-row__msg">{eventText(event)}</p>
@@ -81,9 +78,7 @@ function RecentRow({ event, now }: { event: AlertEvent; now: number }) {
   )
 }
 
-/** Contenu du panneau des alertes : en-tete, alertes actives (critiques
- * d'abord), puis les 10 derniers evenements. Monte seulement panneau ouvert
- * (useNow : les ages se mettent a jour toutes les 5 s). */
+/** Monte panneau ouvert seulement : useNow (ages, toutes les 5 s) ne tourne pas sinon. */
 export function AlertsPanel({ titleId, loaded, status, active, recent, onShow, onClose }: Props) {
   const now = useNow()
   const disabled = status === 'disabled'
@@ -100,8 +95,6 @@ export function AlertsPanel({ titleId, loaded, status, active, recent, onShow, o
         </button>
       </div>
       <div className="alerts-panel__body">
-        {/* « disconnected » dure toute la coupure, tentatives comprises : la
-            note ne clignote pas a chaque tentative */}
         {status === 'disconnected' && (
           <p className="alerts-panel__note">
             <Icon name="alert-circle" size={14} className="sev sev--critical" />

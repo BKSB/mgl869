@@ -7,10 +7,8 @@ export interface ElementSize {
 
 const ZERO: ElementSize = { width: 0, height: 0 }
 
-/** Taille de la boite de contenu d'un element, suivie par ResizeObserver.
- * Renvoie un ref callback (nettoyage React 19) et la derniere taille mesuree ;
- * { 0, 0 } tant que l'element n'est pas monte. Le premier rappel de
- * l'observateur arrive avant la premiere peinture : aucun saut visible. */
+/** Boite de contenu via ResizeObserver ; ref callback a nettoyage (React 19).
+ * { 0, 0 } avant montage ; le premier rappel precede la peinture (pas de saut). */
 export function useElementSize<T extends Element>(): [(el: T | null) => (() => void) | undefined, ElementSize] {
   const [size, setSize] = useState<ElementSize>(ZERO)
   const ref = useCallback((el: T | null) => {

@@ -1,6 +1,4 @@
-/* Coquille de l'application : colonne verticale, contenu centre <= 1760 px,
- * remplissage 100dvh seulement quand l'ecran est assez haut. La coquille ne
- * defile jamais en interne : c'est la page qui defile si le contenu depasse. */
+/* Coquille : jamais de defilement interne, c'est la page qui defile. */
 
 .shell {
   display: flex;
@@ -27,8 +25,6 @@
   padding-inline: var(--gutter);
 }
 
-/* Landmark main : onglets, filtres, tiles, carte. Prend la hauteur libre
- * sous l'app bar (la carte la remplit). */
 .shell__main {
   display: flex;
   flex-direction: column;
@@ -37,8 +33,7 @@
 .shell__main > * {
   min-width: 0;
 }
-/* Cible du lien d'evitement (tabindex -1) : pas d'anneau autour de toute la
- * zone, le focus clavier reprend au premier onglet */
+/* Cible du lien d'evitement, focalisee par script : pas d'anneau sur toute la zone */
 .shell__main:focus {
   outline: none;
 }
@@ -51,7 +46,5 @@
   margin-bottom: var(--sp-3);
 }
 
-/* Verrou 100dvh (>= 1024 x 800) : en fin de components.css, pour primer sur
- * les regles des composants (.chart-area, .datatable) dans la cascade. Pas de
- * height ni d'overflow sur .shell : min-height 100dvh + flex suffisent a
- * remplir l'ecran, et un contenu trop haut fait defiler la page. */
+/* Verrou 100dvh (>= 1024 x 800) : en fin de components.css, pour primer dans la
+ * cascade. Pas de height ni d'overflow sur .shell : la page doit pouvoir defiler. */

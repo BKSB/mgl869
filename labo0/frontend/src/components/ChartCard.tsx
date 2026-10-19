@@ -9,23 +9,15 @@ interface Props {
   id: string
   title: string
   subtitle: string
-  /** Chiffre heros (capteur isole) ; l'unite est rendue plus petite. */
   hero?: { value: string; unit?: string; caption: string }
-  /** Fraicheur des capteurs affiches (celle du capteur isole s'il l'est). */
   lastT: number | undefined
   period: number
-  /** « disconnected » pendant toute la coupure, tentatives comprises : le
-   * bandeau role=alert reste en place (il n'est pas re-annonce a chaque
-   * tentative). */
   status: ConnectionStatus
   replaying: boolean
-  /** id de l'onglet actif ; sans onglet, la carte porte un aria-label. */
   labelledBy?: string
   children: ReactNode
 }
 
-/** Carte heros : bandeau d'alerte interne si le flux est coupe, en-tete
- * (titre, sous-titre, chiffre heros, mise a jour), corps flexible. */
 export function ChartCard({
   id, title, subtitle, hero, lastT, period, status, replaying, labelledBy, children,
 }: Props) {
@@ -50,8 +42,6 @@ export function ChartCard({
           </span>
         </div>
       )}
-      {/* div et non header : dans un tabpanel, un header serait expose comme
-          second landmark banner (celui de l'app bar suffit) */}
       <div className="card__head">
         <div className="card__titles">
           <h2 className="card__title">{title}</h2>

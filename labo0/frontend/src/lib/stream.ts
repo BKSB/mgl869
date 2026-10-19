@@ -1,19 +1,42 @@
-/** Flux WebSocket (topics et alertes) : delai de reconnexion et etats
- * d'attente, une seule source pour les hooks et les textes de l'interface. */
+/** Flux WebSocket (topics, alertes) : logique et textes partages par les hooks
+ * et l'interface. */
 
 import { fmtDuration } from './format'
-import type { ConnectionStatus } from '../types'
+import type { ConnectionStatus, SensorPoint, SensorSeries, SensorValue, TopicRecord } from '../types'
 
-/** Delai entre deux tentatives de reconnexion d'un WebSocket coupe. */
+/** Par capteur : couvre le plus long historique du backend (niveau sonore,
+ * 3 h a 6 s = 1800 points, cf. backend/config/topics.yaml). */
+export const MAX_POINTS = 2000
+
+/** Lot integre par sensor_id, dans l'ordre d'arrivee : une copie par capteur et
+ * par lot (rejeu complet compris) ; lot sans point numerique : meme reference. */
+export function appendBatch(sensors: Record<string, SensorSeries>, batch: TopicRecord[]): Record<string, SensorSeries> {
+  const added: Record<string, { points: SensorPoint[]; last: SensorValue }> = {}
+  for (const rec of batch) {
+    const value = rec.value
+    if (value === null || typeof value !== 'object' || typeof value.value !== 'number') continue
+    const entry = (added[rec.sensor_id] ??= { points: [], last: value })
+    entry.points.push({ t: rec.timestamp_ms, v: value.value })
+    entry.last = value
+  }
+  const ids = Object.keys(added)
+  if (ids.length === 0) return sensors
+  const next = { ...sensors }
+  for (const id of ids) {
+    const { points, last } = added[id]
+    next[id] = { last, points: [...(sensors[id]?.points ?? []), ...points].slice(-MAX_POINTS) }
+  }
+  return next
+}
+
 export const RECONNECT_DELAY_MS = 3000
 
 /** « reconnexion toutes les 3 s » : reste vrai pendant toute la coupure. */
 export const RECONNECT_TEXT = `reconnexion toutes les ${fmtDuration(RECONNECT_DELAY_MS)}`
 
-/** Raison pour laquelle le topic affiche n'a encore aucun capteur. */
+/** Pourquoi le topic affiche n'a encore aucun capteur. */
 export type EmptyKind = 'connecting' | 'replaying' | 'waiting' | 'disconnected'
 
-/** Libelle court de chaque raison : sous-titre de la carte et tiles. */
 export const EMPTY_LABEL: Record<EmptyKind, string> = {
   connecting: 'Connexion au flux…',
   replaying: 'Rejeu de l’historique…',
@@ -21,11 +44,10 @@ export const EMPTY_LABEL: Record<EmptyKind, string> = {
   disconnected: 'Flux interrompu',
 }
 
-/** Coupure du flux d'un topic, detaillee : bandeau et corps de la carte. */
 export const DISCONNECTED_TEXT = `${EMPTY_LABEL.disconnected} — ${RECONNECT_TEXT}`
 
-/** Raison de l'etat vide, ou null si des capteurs sont connus. `waiting` :
- * flux ouvert sans aucun message depuis plusieurs secondes (topic muet). */
+/** null si des capteurs sont connus ; `waiting` : flux ouvert mais muet depuis
+ * plusieurs secondes. */
 export function emptyKind(empty: boolean, status: ConnectionStatus, waiting: boolean): EmptyKind | null {
   if (!empty) return null
   if (waiting) return 'waiting'
