@@ -33,7 +33,7 @@ export function Header({ route, site, people, alertsActive, status, now }: Props
             <path d="M5.5 10v9.5h13V10" />
             <path d="M10 19.5v-5h4v5" />
           </svg>
-          <span className="brand-name">Jumeau numérique</span>
+          <span className="brand-name">GRIDD</span>
           {site && <span className="brand-site">/ {site}</span>}
         </a>
         {people && (

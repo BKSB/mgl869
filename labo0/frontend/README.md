@@ -1,4 +1,4 @@
-# gridd — Jumeau numérique
+# gridd
 
 Interface du jumeau numérique des capteurs du campus (pièces, capteurs,
 alertes), alimentée par le service `gridd-kafka-consumer`. **Le frontend ne
