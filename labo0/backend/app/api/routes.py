@@ -58,8 +58,8 @@ async def alerts(request: Request) -> dict:
 @router.post("/api/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, request: Request,
                             body: dict | None = Body(default=None)) -> dict:
-    """Acquitte une alerte active ({ "by": "<nom>" }, optionnel) ; 404 si elle
-    n'est plus active, 409 si elle l'est deja."""
+    """Corps { "by": "<nom>" } optionnel ; 404 sans alerte active, 409 si elle
+    est deja acquittee."""
     by = str((body or {}).get("by") or "").strip()
     try:
         alert = _alerts(request).acknowledge(alert_id, by,
@@ -73,9 +73,8 @@ async def acknowledge_alert(alert_id: str, request: Request,
 
 @router.get("/api/dashboard")
 async def dashboard(request: Request) -> dict:
-    """Vue du dashboard (view=rooms|metric|alerts|chart, room, metric, sensor,
-    range, sort, filter, from, to) : la meme que /ws/dashboard pousse, sans
-    abonnement."""
+    """Meme vue que /ws/dashboard (parametres en query string, cf.
+    dashboard_views), sans abonnement."""
     return _dashboard(request).render(dict(request.query_params))
 
 

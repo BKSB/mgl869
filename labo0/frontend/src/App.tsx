@@ -20,7 +20,7 @@ function operatorName(): string | null {
   try {
     name = localStorage.getItem(OPERATOR_KEY)
   } catch {
-    // stockage indisponible : le nom est redemande
+    // stockage inaccessible : le nom est demande
   }
   if (name) return name
   const typed = window.prompt('Votre nom (affiché sur les alertes acquittées) :')
@@ -30,7 +30,7 @@ function operatorName(): string | null {
     try {
       localStorage.setItem(OPERATOR_KEY, name)
     } catch {
-      // idem
+      // stockage inaccessible : le nom sera redemande
     }
   }
   return name

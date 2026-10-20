@@ -1,8 +1,7 @@
-"""Archive SQLite des mesures : mesures brutes sur 30 jours glissants,
-agregats horaires, dernier record de chaque capteur et dernier offset
-consomme de chaque partition. Ecrite par lots par le consommateur, lue au
-demarrage par le dashboard. Methodes synchrones : a appeler via
-asyncio.to_thread."""
+"""Archive SQLite : mesures brutes sur 30 jours glissants, agregats horaires,
+dernier record par capteur et dernier offset consomme par partition. Ecrite
+par lots par le consommateur, relue au demarrage par le dashboard ; methodes
+synchrones, a appeler via asyncio.to_thread."""
 
 import json
 import sqlite3
@@ -79,9 +78,9 @@ class HistoryStore:
             conn.executescript(SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
-        # Une connexion par appel, dans le thread qui s'en sert. NORMAL : un
-        # plantage du processus ne perd rien ; seule une panne machine peut
-        # perdre les derniers lots, que Kafka relivre s'ils ne sont pas commites
+        # Connexion par appel, dans le thread appelant. synchronous=NORMAL :
+        # seule une panne machine peut perdre les derniers lots, que Kafka
+        # relivre s'ils ne sont pas commites
         conn = sqlite3.connect(self.path, timeout=10)
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn

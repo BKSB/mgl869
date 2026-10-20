@@ -74,8 +74,9 @@ def format_quantity(value: float, unit: str, max_decimals: int = 1) -> str:
 
 def format_measured(value: float, unit: str, *limits: float,
                     decimals: int = 1) -> str:
-    """Au moins `decimals` decimales (3 au plus) : assez pour ne pas s'ecrire
-    comme une limite qu'elle ne vaut pas : 26.04 au-dessus de 26 s'ecrit "26,04 °C", et non "26 °C"."""
+    """Au moins `decimals` decimales, 3 au plus : assez pour ne pas s'ecrire
+    comme une limite qu'elle ne vaut pas (26.04 au-dessus de 26 : "26,04 °C",
+    pas "26 °C")."""
     while decimals < _MAX_DECIMALS and any(
             limit != value
             and format_number(limit, decimals) == format_number(value, decimals)

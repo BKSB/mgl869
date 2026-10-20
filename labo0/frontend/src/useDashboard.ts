@@ -16,10 +16,10 @@ export interface Dashboard {
   dismiss: (id: string) => void
 }
 
-/** Un seul WebSocket : les parametres de la vue partent a chaque changement
- * (et a chaque reconnexion) ; le backend renvoie la vue complete, puis la
- * repousse a chaque changement de donnees. Une coupure garde la derniere vue
- * affichee, marquee « déconnecté » jusqu'a la reconnexion (toutes les 3 s). */
+/** Un seul WebSocket : les parametres partent a chaque changement et a chaque
+ * reconnexion ; le backend repond par la vue complete, puis la repousse a
+ * chaque changement de donnees. Coupure : derniere vue conservee, etat
+ * « déconnecté », nouvel essai toutes les 3 s. */
 export function useDashboard(params: ViewParams): Dashboard {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [view, setView] = useState<View | null>(null)

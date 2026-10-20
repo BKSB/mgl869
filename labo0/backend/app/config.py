@@ -327,7 +327,7 @@ class Settings:
 
     def consumer_config(self, topic: str | None = None) -> dict:
         """Avec `topic` : groupe dedie, donc offsets propres au topic ; sans :
-        aucun groupe (prechauffage)."""
+        aucun groupe (suiveur)."""
         from aiokafka.helpers import create_ssl_context
 
         config: dict = {

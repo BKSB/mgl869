@@ -50,7 +50,7 @@ async def _seek_after_archive(consumer: AIOKafkaConsumer, topic: str,
 async def consume_topic(topic: str, consumer_config: dict, store: HistoryStore,
                         on_record: Callable[[dict], Awaitable[None]]) -> None:
     consumer = AIOKafkaConsumer(topic, **consumer_config)
-    await consumer.start()  # rend la main une fois les partitions assignees
+    await consumer.start()  # partitions assignees au retour : seek possible
     try:
         await _seek_after_archive(consumer, topic, store)
         logger.info("[%s] abonne, en attente de messages", topic)

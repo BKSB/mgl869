@@ -137,7 +137,7 @@ class TestOnRecord:
     async def test_replayed_then_consumed_record_evaluated_once(self, service,
                                                               emit):
         record = await emit(1120, ts=100, replay=True)
-        # Relu apres le prechauffage (reprise sur les offsets commites)
+        # Relu par le consommateur apres la queue du suiveur
         await service.on_record(CO2, record, replay=False)
 
         assert service.recent() == []

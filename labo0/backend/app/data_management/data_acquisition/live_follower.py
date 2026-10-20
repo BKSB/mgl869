@@ -1,7 +1,6 @@
-"""Suiveur temps reel d'un topic, sans groupe, commit ni archive : relit la
-queue de chaque partition (prechauffage, publie comme rejoue) puis publie
-chaque nouveau message des son arrivee, jusqu'a ce que le consommateur du
-topic ait rattrape le point de depart du suivi."""
+"""Suiveur temps reel d'un topic (sans groupe, commit ni archive) : publie la
+queue de chaque partition comme rejouee, puis chaque nouveau message des son
+arrivee, jusqu'a ce que le consommateur ait rattrape son point de depart."""
 
 import asyncio
 import logging

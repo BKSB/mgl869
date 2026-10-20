@@ -21,7 +21,7 @@ def sensor_id(record: dict) -> str:
 
 class OffsetTracker:
     """Idempotence d'un observateur : livraison au moins une fois, et le
-    prechauffage et le consommateur relisent les memes records."""
+    suiveur et le consommateur livrent les memes records."""
 
     def __init__(self) -> None:
         # Plus haut offset accepte par (topic, partition)
@@ -41,8 +41,8 @@ class OffsetTracker:
 
 
 class SeenOffsets:
-    """Offsets deja vus par partition, en intervalles fusionnes : prechauffage
-    et rattrapage se recouvrent dans n'importe quel ordre, sans doublon et en
+    """Offsets deja vus par partition, en intervalles fusionnes : suiveur et
+    rattrapage se recouvrent dans n'importe quel ordre, sans doublon et en
     memoire constante (contrairement a OffsetTracker, un offset plus ancien
     reste accepte)."""
 

@@ -79,7 +79,7 @@ class TestFormatting:
         assert format_measured(valeur, "ppm", *limites) == attendu
 
     def test_spaces_like_dashboard(self):
-        # Comme lib/format.ts : les messages s'affichent a cote des tuiles
+        # Memes espaces que les vues du dashboard, affichees a cote des messages
         assert G == "\u00a0" and F == "\u202f"
         assert format_quantity(1535, "ppm") == "1\u00a0535\u202fppm"
 

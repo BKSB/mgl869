@@ -19,7 +19,7 @@ services:
       - "${KAFKA_SSL_CA_HOST_PATH:?Lancer avec : docker compose --env-file backend/.env up -d}:/etc/gridd/kafka/gridd-kafka-ca.crt:ro"
       # Configuration des topics : editable sans rebuild (redemarrage suffit)
       - ./backend/config:/srv/gridd/config:ro
-      # Persistance des donnees consommees
+      # Archive SQLite des mesures (history.sqlite)
       - gridd-data:/var/lib/gridd/data
 
   gridd-dashboard:

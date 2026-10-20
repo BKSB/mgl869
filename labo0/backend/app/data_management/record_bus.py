@@ -14,7 +14,7 @@ class RecordObserver(Protocol):
         - boucle asyncio, en serie avec les autres observateurs et AVANT le
           commit : rapide, ou deleguer le travail lent (asyncio.to_thread) ;
         - idempotent sur (topic, partition, offset) : livraison au moins une
-          fois, et le prechauffage relit des records deja vus ;
+          fois, et le suiveur et le consommateur livrent les memes records ;
         - replay=True (prechauffage, rattrapage) : mise a jour d'etat
           seulement, aucun evenement (ni notification ni annonce) ;
         - exception journalisee par le bus, sans effet sur les autres

@@ -62,7 +62,7 @@ class TopicHub:
             sensor, deque(maxlen=size)
         )
         keys = self._keys.setdefault((topic, sensor), set())
-        # Deja vu : prechauffage et reprise sur offset commite se recouvrent
+        # Deja vu : la queue du suiveur et le consommateur se recouvrent
         if key in keys:
             return
         # Copie (record partage entre observateurs) ; sensor_id : les clients
