@@ -46,10 +46,12 @@ def run_main(monkeypatch, plaintext_settings, created_buses):
     return _run
 
 
-async def test_hub_subscribed_to_service_bus(run_main, created_buses):
+async def test_hub_subscribed_to_service_bus(run_main, created_buses, tmp_path):
     code, applications = run_main()
 
     assert code == 0
+    # L'archive est creee dans OUTPUT_DIR des la composition
+    assert (tmp_path / "history.sqlite").is_file()
     service = applications[0].state.streaming
     # Un seul bus, construit par create_bus
     (bus,) = created_buses

@@ -156,12 +156,19 @@ class TestDedup:
         (sensor,) = twin.sensors()
         assert (sensor.value, sensor.points) == (1.0, [(100, 1.0)])
 
-    def test_other_partition_or_sensor(self):
+    def test_other_partition_or_topic(self):
         twin = DigitalTwin()
         assert twin.ingest(CO2, record(1, ts=100, offset=7), now_ms=1000)
         assert twin.ingest(CO2, record(2, ts=200, offset=7, partition=1), now_ms=1000)
-        assert twin.ingest(CO2, record(3, ts=300, offset=7, node_id="n2"), now_ms=1000)
+        assert twin.ingest("autre", record(3, ts=300, offset=7), now_ms=1000)
         assert twin.sensor(CO2, "n1").points == [(100, 1.0), (200, 2.0)]
+
+    def test_offset_seen_whatever_the_payload(self):
+        """Prefixe consomme : un record sans mesure compte aussi."""
+        twin = DigitalTwin()
+        assert not twin.ingest(CO2, record("texte", ts=100, offset=7), now_ms=1000)
+        assert not twin.ingest(CO2, record(1, ts=100, offset=7), now_ms=1000)
+        assert twin.sensors() == []
 
     def test_older_offset_accepted(self):
         """Rattrapage derriere le prechauffage : les offsets reviennent en
@@ -219,6 +226,7 @@ class TestSnapshot:
         twin.ingest("autre", record(5, ts=NOW, offset=1, node_id="n9"), now_ms=NOW)
 
         data = json.loads(json.dumps(twin.to_dict()))
+        assert data["seen"] == {CO2: {"0": [[3, 4]]}, "autre": {"0": [[1, 1]]}}
         restored = DigitalTwin()
         assert restored.restore(data, NOW) == 2
 

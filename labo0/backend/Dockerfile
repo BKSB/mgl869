@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY config/ config/
 
-# Repertoire de sortie des donnees (un fichier JSONL par topic)
+# Repertoire des donnees : archive SQLite history.sqlite (volume gridd-data)
 RUN mkdir -p /var/lib/gridd/data && chown -R gridd:gridd /var/lib/gridd
 
 USER gridd

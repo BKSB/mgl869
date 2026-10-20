@@ -12,5 +12,6 @@ __pycache__/
 node_modules/
 dist/
 
-# Donnees consommees
+# Donnees consommees (archive SQLite, anciens JSONL)
+*.sqlite*
 *.jsonl

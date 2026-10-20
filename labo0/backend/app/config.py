@@ -63,7 +63,7 @@ class TopicConfig:
     name: str
     # Par capteur : messages gardes et rejoues a la connexion WebSocket
     history_per_sensor: int
-    # Par partition : messages relus au demarrage (prechauffage)
+    # Par partition : queue relue par le suiveur au demarrage (prechauffage)
     warmup_messages: int
 
 
@@ -293,7 +293,7 @@ class Settings:
     sasl_username: str = _env_field("KAFKA_USERNAME", "")
     sasl_password: str = _env_field("KAFKA_PASSWORD", "")
 
-    # Un fichier JSONL par topic
+    # Repertoire de l'archive SQLite (history.sqlite)
     output_dir: str = _env_field("OUTPUT_DIR", "/var/lib/gridd/data")
 
     topic_configs: list[TopicConfig] = field(default_factory=_load_topic_configs)

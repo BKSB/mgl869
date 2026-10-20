@@ -9,7 +9,8 @@ __pycache__/
 *.pyc
 .venv/
 
-# Donnees consommees
+# Donnees consommees (archive SQLite, anciens JSONL)
+*.sqlite*
 *.jsonl
 
 # Certificat

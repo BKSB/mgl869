@@ -6,6 +6,10 @@ import bisect
 
 NO_SENSOR_ID = "_sans_node_id"
 
+HOUR_MS = 3_600_000
+# Profondeur de l'historique, jumeau et archive : 30 jours glissants
+HISTORY_MS = 30 * 24 * HOUR_MS
+
 
 def sensor_id(record: dict) -> str:
     """Seule definition de l'identite d'un capteur (hub, alertes, clients)."""

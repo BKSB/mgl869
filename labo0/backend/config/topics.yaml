@@ -4,7 +4,8 @@
 #   history_per_sensor : messages conserves en memoire et rejoues par capteur
 #                        (node_id) a chaque connexion WebSocket
 #   warmup_messages    : messages relus en fin de chaque partition au
-#                        demarrage pour remplir ces tampons (0 = desactive).
+#                        demarrage pour remplir ces tampons (0 = aucune
+#                        relecture, le suivi temps reel part de la fin).
 #                        A dimensionner >= history_per_sensor x nb de capteurs
 #                        du topic, divise par son nombre de partitions.
 #

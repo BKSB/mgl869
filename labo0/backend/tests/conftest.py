@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import AlertsConfig, Settings, TopicConfig
+from app.data_management.data_storage.history_store import HistoryStore
 
 
 def drain(queue: asyncio.Queue) -> list:
@@ -95,3 +96,8 @@ def plaintext_settings(tmp_path):
             **overrides,
         )
     return _make
+
+
+@pytest.fixture
+def store(tmp_path):
+    return HistoryStore(tmp_path / "history.sqlite")

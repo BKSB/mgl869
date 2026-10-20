@@ -1,5 +1,4 @@
 import asyncio
-import logging
 
 import pytest
 
@@ -11,6 +10,7 @@ from app.data_management.data_processing.alert_rules import (
     AlertRule,
 )
 from app.data_management.record_bus import RecordBus
+from app.data_management.records import HOUR_MS
 from app.services.alert_service import AlertService
 from app.services.dashboard_service import DashboardService
 from tests.conftest import drain, make_measurement
@@ -148,55 +148,42 @@ class TestViews:
         assert service.render({})["room"]["sensors"][0]["value_text"] == "400"
 
 
-class TestSnapshot:
-    async def test_saved_on_stop_and_restored(self, alerts, tmp_path):
-        path = tmp_path / "history.json"
-        service = DashboardService([CO2], alerts, clock=lambda: NOW,
-                                   snapshot_path=path)
-        await service.on_record(CO2, make_measurement(400, timestamp_ms=NOW,
-                                                      offset=1), replay=True)
-        service.start()
-        await service.stop()
-        assert path.is_file()
+class TestHistory:
+    async def test_restored_from_store(self, alerts, store):
+        store.insert([make_measurement(400, timestamp_ms=NOW, offset=1, topic=CO2)])
 
-        restored = DashboardService([CO2], alerts, clock=lambda: NOW,
-                                    snapshot_path=path)
+        restored = DashboardService([CO2], alerts, clock=lambda: NOW, store=store)
+
         tile = restored.render({"view": "rooms"})["room"]["sensors"][0]
         assert (tile["value_text"], tile["points"]) == ("400", [[NOW, 400.0]])
-        # Offset deja vu avant l'arret : rejete apres la restauration
+        # Offset deja archive (relecture Kafka) : rejete apres la restauration
         await restored.on_record(CO2, make_measurement(999, timestamp_ms=NOW + 1,
-                                                       offset=1), replay=False)
+                                                       offset=1, topic=CO2),
+                                 replay=False)
         assert restored.render({"view": "rooms"})["room"]["sensors"][0][
             "value_text"] == "400"
 
-    async def test_without_path(self, service):
-        service.start()
-        assert service._saver is None
-        await service.stop()  # sans erreur
+    def test_place_unit_and_hours_restored(self, alerts, store):
+        store.insert([
+            make_measurement(1, timestamp_ms=NOW - 2 * HOUR_MS, offset=1, topic=CO2),
+            make_measurement(2, timestamp_ms=NOW - HOUR_MS, offset=2, topic=CO2),
+            make_measurement(3, timestamp_ms=NOW, offset=3, topic=CO2,
+                             zone="Zone B", unit="PPM"),
+        ])
 
-    async def test_autosave(self, alerts, tmp_path):
-        path = tmp_path / "history.json"
-        service = DashboardService([CO2], alerts, snapshot_path=path)
-        service.SNAPSHOT_INTERVAL_S = 0.01
-        service.start()
-        service.start()  # idempotent
-        await asyncio.sleep(0.1)
-        assert path.is_file()
-        await service.stop()
+        restored = DashboardService([CO2], alerts, clock=lambda: NOW, store=store)
 
-    def test_unreadable_snapshot_logged(self, alerts, tmp_path, caplog):
-        path = tmp_path / "history.json"
-        path.write_text("{pas du json", encoding="utf-8")
-        with caplog.at_level(logging.WARNING):
-            service = DashboardService([CO2], alerts, snapshot_path=path)
-        assert "illisible" in caplog.text
+        view = restored.render({"view": "rooms"})
+        # Lieu et unite du dernier record
+        assert [r["name"] for r in view["rooms"]] == ["Zone B"]
+        tile = view["room"]["sensors"][0]
+        assert (tile["value_text"], tile["unit"]) == ("3", "PPM")
+        chart = restored.render({"view": "chart", "metric": "co2", "sensor": "n1",
+                                 "range": "7d"})["chart"]
+        assert [round(v) for _, v, _, _ in chart["series"]] == [1, 2, 3]
+
+    def test_without_store(self, service):
         assert service.render({"view": "rooms"})["rooms"] == []
-
-    async def test_save_failure_logged(self, alerts, tmp_path, caplog):
-        service = DashboardService([CO2], alerts, snapshot_path=tmp_path)
-        with caplog.at_level(logging.WARNING):
-            await service.save_snapshot()  # cible : un dossier
-        assert "non sauvegarde" in caplog.text
 
 
 class TestAlertNotifications:

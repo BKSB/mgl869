@@ -45,20 +45,23 @@ SASL_SSL (authentification SCRAM, verification du broker par certificat CA)
 et consomme **chaque topic separement** : une tache asyncio et un
 consommateur dedies par topic, chacun avec son propre `group.id` et ses
 propres offsets. Consommateurs et serveur WebSocket partagent la meme boucle
-d'evenements. Les messages de chaque topic sont ecrits dans un fichier JSONL
-distinct (`<topic>.jsonl`).
+d'evenements. Les mesures de chaque topic sont archivees par lots dans une
+base SQLite (`OUTPUT_DIR/history.sqlite`, 30 jours glissants, voir
+[Archive SQLite](#archive-sqlite)), qui fixe aussi le point de reprise du
+consommateur.
 
 ### Architecture : patron Observateur
 
-L'acquisition (consommateurs Kafka, prechauffage d'historique) ne connait
-qu'un **bus de records** (`app/data_management/record_bus.py`), le Sujet du
-patron Observateur : chaque record lui est publie, et il le transmet a tous
-les observateurs inscrits, un par un, dans l'ordre d'inscription. Le hub
+L'acquisition (consommateurs et suiveurs Kafka) ne connait qu'un **bus de
+records** (`app/data_management/record_bus.py`), le Sujet du patron
+Observateur : chaque record lui est publie, et il le transmet a tous les
+observateurs inscrits, un par un, dans l'ordre d'inscription. Le hub
 WebSocket est le premier observateur, le dashboard (jumeau numerique, voir
 [Dashboard](#dashboard-jumeau-numerique)) le deuxieme, le service d'alertes
-(voir [Alertes](#alertes)) le troisieme ; un futur service (historique en
-base, qualite des donnees) devient un observateur de plus, inscrit dans
-`app/main.py`, sans toucher a l'acquisition.
+(voir [Alertes](#alertes)) le troisieme ; un futur service (qualite des
+donnees, export) devient un observateur de plus, inscrit dans `app/main.py`,
+sans toucher a l'acquisition. L'archivage n'est pas un observateur : le
+consommateur ecrit la base avant de publier le lot.
 
 Contrat d'un observateur (protocole `RecordObserver`) :
 
@@ -69,23 +72,45 @@ Contrat d'un observateur (protocole `RecordObserver`) :
 - **idempotente** : la livraison est "au moins une fois" et le prechauffage
   peut relire des messages deja vus (un record est identifie par `topic`,
   `partition`, `offset` ; `records.OffsetTracker` fournit ce filtre) ;
-- `replay=True` signale un record relu au demarrage (prechauffage) ou
+- `replay=True` signale un record relu au demarrage (queue du suiveur) ou
   anterieur de plus de 5 minutes au demarrage du service (rattrapage d'un
-  arret prolonge, ou de toute la retention quand le groupe n'a pas d'offset
-  commite) : il sert a reconstruire un etat (historique, registre, alertes
+  arret prolonge, ou de toute la retention Kafka quand la base n'a pas de
+  curseur) : il sert a reconstruire un etat (historique, registre, alertes
   actives), mais aucun evenement ne doit en sortir (ni notification, ni
   annonce). Le hub traite les deux de la meme facon.
 
 Garanties :
 
-- **au moins une fois** : l'offset n'est commite qu'apres la notification de
-  tous les observateurs ; un arret pendant le traitement fait relire le
-  message au redemarrage ;
+- **au moins une fois** : chaque lot (500 messages au plus) est archive,
+  puis notifie a tous les observateurs, puis commite ; un arret pendant le
+  traitement fait relire le lot au redemarrage, et la base comme les
+  observateurs ignorent les doublons. La position de reprise vient de la
+  base (dernier offset archive par partition) ; l'offset commite du groupe
+  Kafka ne sert qu'au suivi du retard ;
 - **isolation des pannes** : l'exception d'un observateur est journalisee
   (classe, topic, partition, offset) et n'empeche ni les observateurs
   suivants, ni la diffusion WebSocket, ni le commit. Le record n'est pas
   renvoye a l'observateur en echec : s'il ne doit rien perdre, il gere ses
   propres reprises. Une annulation (arret du service) n'est jamais avalee.
+
+### Deux lecteurs par topic
+
+Chaque topic est lu par deux taches (`app/services/streaming_service.py`) :
+
+- le **consommateur** (`data_acquisition/consumer.py`, groupe Kafka) reprend
+  apres le dernier offset archive de chaque partition (sans curseur : au debut
+  de la retention Kafka, soit une douzaine de jours), archive chaque lot,
+  publie ses records puis commite. Pendant un rattrapage il livre le passe,
+  dans l'ordre ;
+- le **suiveur** (`data_acquisition/live_follower.py`, sans groupe ni commit)
+  publie d'abord la queue de chaque partition (`warmup_messages`, comme
+  rejouee), puis chaque nouveau message des son arrivee : le frontend recoit
+  le temps reel meme pendant un rattrapage de plusieurs jours. Il s'arrete
+  de lui-meme quand le consommateur a livre, sur chaque partition, la fin
+  relevee a son depart ; en regime etabli il ne reste qu'un lecteur.
+
+Un record livre par les deux est ignore par chaque observateur (hub : cles
+par capteur ; alertes : `OffsetTracker` ; jumeau : `SeenOffsets`).
 
 Exemple : un registre de la derniere mesure de chaque capteur.
 
@@ -114,7 +139,8 @@ bus.subscribe(alerts)            # service d'alertes
 bus.subscribe(SensorRegistry())  # nouvel observateur, acquisition inchangee
 ```
 
-Le `StreamingService` recoit ce bus (`StreamingService(settings, hub, bus)`) ;
+Le `StreamingService` recoit ce bus et l'archive
+(`StreamingService(settings, hub, bus, store)`) ;
 seul `create_bus` y inscrit des observateurs. Le hub doit y etre inscrit,
 puisque les abonnements WebSocket du service en dependent : sinon le service
 refuse d'etre construit (`ValueError`). Les tests de l'API utilisent le meme
@@ -142,8 +168,8 @@ Definis dans `backend/config/topics.yaml` (seule source de la liste), suivant la
 | `KAFKA_SSL_CA_HOST_PATH` | — | CA certificate : chemin sur l'hote (monte en volume) |
 | `KAFKA_SSL_CA_LOCATION` | `/etc/gridd/kafka/gridd-kafka-ca.crt` | CA certificate : chemin dans le conteneur |
 | `KAFKA_GROUP_ID_PREFIX` | `gridd-consumer` | Prefixe du `group.id` par topic |
-| `KAFKA_AUTO_OFFSET_RESET` | `earliest` | Position initiale sans offset commite |
-| `OUTPUT_DIR` | `/var/lib/gridd/data` | Repertoire des fichiers JSONL |
+| `KAFKA_AUTO_OFFSET_RESET` | `earliest` | Position de repli quand l'offset de reprise est sorti de la retention |
+| `OUTPUT_DIR` | `/var/lib/gridd/data` | Repertoire de l'archive SQLite (`history.sqlite` et ses fichiers `-wal`/`-shm`) |
 | `TOPICS_CONFIG` | `config/topics.yaml` | Fichier YAML des topics et de leurs historiques |
 | `ALERTS_CONFIG` | `config/alerts.yaml` | Fichier YAML des regles d'alerte (absent : alertes desactivees) |
 
@@ -155,7 +181,7 @@ dans le conteneur (modifiable sans rebuild ; un redemarrage suffit) :
 ```yaml
 defaults:
   history_per_sensor: 100   # messages conserves/rejoues par capteur
-  warmup_messages: 1000     # relus par partition au demarrage
+  warmup_messages: 1000     # queue relue par partition au demarrage
 
 topics:
   gridd.obs.environmental.temperature: {}      # prend les defauts
@@ -261,7 +287,7 @@ donnees** :
   `snapshot` (re-synchronisation) ; rien n'est historise ni journalise.
 - **Idempotence** : chaque record n'est evalue qu'une fois, dans l'ordre de
   sa partition : un record dont l'offset ne depasse pas le plus haut deja
-  evalue sur sa partition (relecture Kafka, prechauffage puis consommateur)
+  evalue sur sa partition (relecture Kafka, suiveur puis consommateur)
   est ignore. L'ordre des offsets fait foi dans une partition : un
   horodatage qui recule ou un record date du futur ne fige jamais un
   capteur. Seule une mesure arrivee par une autre partition et plus
@@ -322,14 +348,12 @@ frontend n'applique aucune regle : etats, libelles (« Normal », « Warning »,
 « Erreur »), nombres formates, seuils, tris, comptes et notifications sont
 calcules ici.
 
-Chaque record n'est compte qu'une fois par capteur (`records.SeenOffsets` :
-offsets vus par partition, en intervalles), quel que soit l'ordre d'arrivee
-du prechauffage, du temps reel et d'un rattrapage. L'historique est
-sauvegarde toutes les 10 minutes et a l'arret dans
-`OUTPUT_DIR/dashboard-history.json` (ecriture atomique) et recharge au
-demarrage : le graphe sur 30 jours survit aux redemarrages et se complete au
-fil de l'eau (apres un premier demarrage, il ne contient que le prechauffage
-Kafka, soit `warmup_messages` par partition).
+Chaque record n'est compte qu'une fois (`records.SeenOffsets` : offsets vus
+par topic et partition, en intervalles), quel que soit l'ordre d'arrivee du
+suiveur et du consommateur. Au demarrage, le jumeau est recharge depuis
+l'archive (voir [Archive SQLite](#archive-sqlite)) : 24 h de points bruts,
+30 jours d'agregats horaires, dernier record de chaque capteur et offsets
+deja archives ; le graphe sur 30 jours survit donc aux redemarrages.
 
 Protocole de `/ws/dashboard` : le client envoie en JSON les parametres de
 l'ecran qu'il affiche, le backend repond aussitot par la vue complete, puis la
@@ -388,6 +412,40 @@ la piece `_sans_piece` (« Sans pièce »), absente du menu `rooms` mais rendue
 quand elle est demandee par son id. Les unites des payloads sont traduites
 pour l'affichage (`C` -> `°C`, `person` -> rien).
 
+### Archive SQLite
+
+`data_storage/history_store.py` archive les mesures dans
+`OUTPUT_DIR/history.sqlite` (bibliotheque standard `sqlite3`, journal WAL) :
+
+- `measurement` : chaque mesure numerique datee, cle `(topic, partition,
+  offset)` ; un lot relu est ignore (`INSERT OR IGNORE`) ;
+- `hourly` : agregats horaires (nombre, somme, min, max) par capteur, cumules
+  depuis les lignes reellement inserees ;
+- `latest` : dernier record JSON de chaque capteur (lieu, unite, valeur) ;
+- `cursor` : dernier offset consomme par partition, numerique ou non.
+
+Le consommateur ecrit un lot par transaction, hors de la boucle asyncio
+(`asyncio.to_thread`), et purge au plus une fois par heure ce qui a plus de
+30 jours. Au demarrage, le dashboard recharge le jumeau depuis la base et le
+consommateur repart de `cursor + 1` sur chaque partition ; sans curseur, il
+relit toute la retention Kafka (une douzaine de jours) et la base se
+constitue au fil de l'eau. Un curseur sorti de la retention est ramene au
+debut (`KAFKA_AUTO_OFFSET_RESET`).
+
+A savoir :
+
+- aucune migration : les anciens `<topic>.jsonl` et `dashboard-history.json`
+  du volume ne sont pas relus et peuvent etre supprimes ;
+- base corrompue ou illisible : le service refuse de demarrer (trace
+  `sqlite3`) ; supprimer `history.sqlite*` et redemarrer ;
+- topic recree dans Kafka (offsets repartis de zero) : supprimer la base,
+  sinon les anciennes lignes masquent les nouvelles ;
+- durabilite : `synchronous=NORMAL` resiste a un plantage du processus ;
+  seule une panne de la machine peut perdre les derniers lots, que Kafka
+  relivre s'ils n'etaient pas commites ;
+- place : environ 1,5 Go pour 30 jours au debit actuel (~8 M de lignes) ;
+  WAL suppose un systeme de fichiers local (pas de NFS/SMB).
+
 ### Fichiers d'environnement
 
 - `backend/.env.local` : modele versionne sur GitHub, toutes les valeurs vides.
@@ -405,7 +463,7 @@ tableau ci-dessus.
 
 Chaque topic a son propre flux WebSocket : un client s'abonne a l'URL du
 topic qui l'interesse et recoit chaque message Kafka en JSON des sa
-reception (en plus de l'archivage JSONL). A la connexion, les derniers
+reception (en plus de l'archivage SQLite). A la connexion, les derniers
 messages de chaque capteur du topic (`history_per_sensor` du YAML,
 100 par defaut) sont rejoues en ordre chronologique, puis le flux continue
 en temps reel — les dashboards affichent donc une courbe des l'ouverture
@@ -447,6 +505,11 @@ docker logs -f gridd-kafka-consumer
 Le certificat CA de l'hote (`KAFKA_SSL_CA_HOST_PATH`) est monte en lecture
 seule dans le conteneur au chemin `KAFKA_SSL_CA_LOCATION`, lu par le service.
 
+Le volume `gridd-data` (`OUTPUT_DIR`) contient l'archive `history.sqlite` et
+ses fichiers `-wal`/`-shm` ; il survit aux redeploiements. Les anciens
+`*.jsonl` et `dashboard-history.json` qui s'y trouvent peuvent etre
+supprimes.
+
 ### Execution locale (sans Docker)
 
 ```bash
@@ -456,13 +519,14 @@ KAFKA_SSL_CA_LOCATION=/chemin/vers/gridd-kafka-ca.crt python -m app.main
 ```
 
 L'arret se fait proprement sur `SIGINT`/`SIGTERM` : chaque consommateur
-commit ses offsets apres traitement de chaque message, puis se ferme.
+commite ses offsets apres chaque lot traite, puis se ferme ; un lot
+interrompu est relu au redemarrage.
 
 ### Tests
 
 Tests unitaires (pytest) dans `backend/tests/` : bus de records (patron
-Observateur), hub WebSocket, consommateur, prechauffage d'historique,
-configuration (topics et alertes), evaluation des regles d'alerte, service
+Observateur), hub WebSocket, consommateur, suiveur temps reel, archive
+SQLite, configuration (topics et alertes), evaluation des regles d'alerte, service
 d'alertes (acquittement compris), jumeau numerique, vues et service du
 dashboard, couche service, composition root et API. Kafka est simule,
 aucun broker n'est necessaire.

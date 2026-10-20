@@ -40,15 +40,15 @@ def alerts():
 
 
 @pytest.fixture
-def make_client(monkeypatch, plaintext_settings, hub):
+def make_client(monkeypatch, plaintext_settings, hub, store):
     async def fake_consume(**kwargs):
         await asyncio.Event().wait()
 
-    async def fake_warmup(**kwargs):
+    async def fake_follow(**kwargs):
         pass
 
     monkeypatch.setattr(streaming_service, "consume_topic", fake_consume)
-    monkeypatch.setattr(streaming_service, "warmup_topic", fake_warmup)
+    monkeypatch.setattr(streaming_service, "follow_topic", fake_follow)
 
     def _make(alert_service: AlertService) -> TestClient:
         # Meme assemblage que main() : le bus notifie le hub, le dashboard
@@ -56,7 +56,7 @@ def make_client(monkeypatch, plaintext_settings, hub):
         dashboard = DashboardService(["topic.a", "topic.b"], alert_service)
         dashboard.REFRESH_MS = 50
         bus = create_bus(hub, alert_service, dashboard)
-        service = StreamingService(plaintext_settings(), hub, bus)
+        service = StreamingService(plaintext_settings(), hub, bus, store)
         test_client = TestClient(create_app(service, alert_service, dashboard))
         test_client.bus = bus  # point de publication des mesures de test
         test_client.dashboard = dashboard

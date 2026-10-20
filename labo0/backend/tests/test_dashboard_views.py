@@ -253,12 +253,18 @@ class TestRoomsView:
             **world.render(view="rooms"), "rooms": [], "room": None}
 
     async def test_room_status_is_the_worst(self, world):
+        """Seuls les capteurs dans le pire etat sont comptes : le warning
+        n'est pas une erreur."""
         await world.measure(CO2, "a", 1600)
         await world.measure(CO2, "b", 1200)
         await world.measure(CO2, "c", 400)
         room = world.render(view="rooms")["room"]
         assert (room["status"], room["status_label"]) == \
-            ("critical", "Erreur · 2 capteurs")
+            ("critical", "Erreur · 1 capteur")
+
+        await world.measure(CO2, "b", 1700)
+        assert world.render(view="rooms")["room"]["status_label"] == \
+            "Erreur · 2 capteurs"
 
     async def test_sensor_without_place_hidden_from_menu(self, world):
         await world.measure(CO2, "a", 1, room=None)

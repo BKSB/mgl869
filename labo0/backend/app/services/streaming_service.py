@@ -9,8 +9,9 @@ from functools import partial
 
 from app.config import Settings
 from app.data_management.data_acquisition.consumer import consume_topic
-from app.data_management.data_acquisition.history_warmup import warmup_topic
+from app.data_management.data_acquisition.live_follower import follow_topic
 from app.data_management.data_distribution.websocket_hub import TopicHub
+from app.data_management.data_storage.history_store import HistoryStore
 from app.data_management.record_bus import RecordBus
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,11 @@ logger = logging.getLogger(__name__)
 class StreamingService:
 
     # Record anterieur de plus de 5 min au demarrage : rattrapage (long arret,
-    # groupe sans offset commite) publie comme rejoue ; en deca, temps reel
+    # base vide) publie comme rejoue ; en deca, temps reel
     BACKLOG_GRACE_MS = 5 * 60_000
 
-    def __init__(self, settings: Settings, hub: TopicHub,
-                 bus: RecordBus) -> None:
+    def __init__(self, settings: Settings, hub: TopicHub, bus: RecordBus,
+                 store: HistoryStore) -> None:
         """Hub requis sur le bus : il alimente les abonnements WebSocket."""
         if hub not in bus.observers:
             raise ValueError("le hub doit etre inscrit sur le bus de records "
@@ -31,13 +32,16 @@ class StreamingService:
         self._settings = settings
         self._hub = hub
         self._bus = bus
+        self._store = store
         self._consumers: dict[str, asyncio.Task] = {}
-        self._warmups: list[asyncio.Task] = []
+        self._followers: list[asyncio.Task] = []
+        # topic -> partition -> dernier offset livre par le consommateur
+        self._positions: dict[str, dict[int, int]] = {}
 
     # --- Cycle de vie -----------------------------------------------------
 
     def _replay_publisher(self, topic: str) -> Callable[[dict], Awaitable[None]]:
-        """Publie chaque record du prechauffage comme rejoue. Fermeture sur
+        """Publie chaque record de la queue comme rejoue. Fermeture sur
         `topic` : pas de liaison tardive sur la variable de boucle de start."""
         async def publish(record: dict) -> None:
             await self._bus.publish(topic, record, replay=True)
@@ -52,27 +56,48 @@ class StreamingService:
             await self._bus.publish(topic, record, replay=backlog)
         return publish
 
+    def _consumer_publisher(self, topic: str,
+                            live_since_ms: int) -> Callable[[dict], Awaitable[None]]:
+        """Publication du consommateur : note en plus le dernier offset livre
+        par partition, ce qui met fin au suivi temps reel."""
+        publish = self._live_publisher(topic, live_since_ms)
+        positions = self._positions.setdefault(topic, {})
+
+        async def publish_and_track(record: dict) -> None:
+            await publish(record)
+            if isinstance(record.get("offset"), int):
+                positions[record.get("partition")] = record["offset"]
+        return publish_and_track
+
+    def _caught_up_checker(self, topic: str) -> Callable[[dict[int, int]], bool]:
+        """Vrai quand le consommateur a livre, sur chaque partition visee, un
+        offset >= fin - 1 : tout ce qui precede le depart du suiveur est passe."""
+        positions = self._positions.setdefault(topic, {})
+        return lambda targets: all(positions.get(p, -1) >= end - 1
+                                   for p, end in targets.items())
+
     def start(self) -> None:
         # Limite du temps reel, figee au demarrage
         live_since_ms = int(time.time() * 1000) - self.BACKLOG_GRACE_MS
         for topic_cfg in self._settings.topic_configs:
             topic = topic_cfg.name
-            if topic_cfg.warmup_messages > 0:
-                self._warmups.append(asyncio.create_task(
-                    warmup_topic(
-                        topic=topic,
-                        consumer_config=self._settings.consumer_config(),
-                        publish=self._replay_publisher(topic),
-                        tail_per_partition=topic_cfg.warmup_messages,
-                    ),
-                    name=f"warmup-{topic}",
-                ))
+            self._followers.append(asyncio.create_task(
+                follow_topic(
+                    topic=topic,
+                    consumer_config=self._settings.consumer_config(),
+                    publish_replay=self._replay_publisher(topic),
+                    publish_live=self._live_publisher(topic, live_since_ms),
+                    caught_up=self._caught_up_checker(topic),
+                    tail_per_partition=topic_cfg.warmup_messages,
+                ),
+                name=f"follower-{topic}",
+            ))
             consumer = asyncio.create_task(
                 consume_topic(
                     topic=topic,
                     consumer_config=self._settings.consumer_config(topic),
-                    output_dir=self._settings.output_dir,
-                    on_record=self._live_publisher(topic, live_since_ms),
+                    store=self._store,
+                    on_record=self._consumer_publisher(topic, live_since_ms),
                 ),
                 name=f"consumer-{topic}",
             )
@@ -83,7 +108,7 @@ class StreamingService:
                     self._settings.security_protocol)
 
     async def stop(self) -> None:
-        tasks = [*self._warmups, *self._consumers.values()]
+        tasks = [*self._followers, *self._consumers.values()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

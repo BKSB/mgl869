@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from app.api.routes import router
 from app.config import Settings
 from app.data_management.data_distribution.websocket_hub import TopicHub
+from app.data_management.data_storage.history_store import HistoryStore
 from app.data_management.record_bus import RecordBus
 from app.services.alert_service import AlertService
 from app.services.dashboard_service import DashboardService
@@ -25,10 +26,8 @@ def create_app(service: StreamingService, alerts: AlertService,
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         service.start()
-        dashboard.start()
         yield
         await service.stop()
-        await dashboard.stop()
 
     app = FastAPI(title="gridd-kafka-consumer", lifespan=lifespan)
     app.state.streaming = service
@@ -70,11 +69,11 @@ def main() -> int:
                             for t in settings.topic_configs},
     )
     alerts = AlertService(settings.alerts)
-    dashboard = DashboardService(
-        settings.topics, alerts,
-        snapshot_path=Path(settings.output_dir) / "dashboard-history.json")
+    # Archive des mesures : historique du dashboard et reprise du consommateur
+    store = HistoryStore(Path(settings.output_dir) / "history.sqlite")
+    dashboard = DashboardService(settings.topics, alerts, store=store)
     service = StreamingService(settings, hub,
-                               create_bus(hub, alerts, dashboard))
+                               create_bus(hub, alerts, dashboard), store)
     uvicorn.run(create_app(service, alerts, dashboard), host="0.0.0.0",
                 port=8000, log_config=None)
     return 0

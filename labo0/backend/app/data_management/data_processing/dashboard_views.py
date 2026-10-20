@@ -200,18 +200,18 @@ def _rooms(ctx: Context) -> list[tuple[Place, list[SensorTwin]]]:
 
 
 def _room_status(ctx: Context, sensors: Sequence[SensorTwin]) -> tuple[str, int]:
-    """Pire etat et nombre de capteurs en alerte."""
+    """Pire etat et nombre de capteurs dans cet etat."""
     statuses = [ctx.status(s) for s in sensors]
     worst = max(statuses, key=STATUS_RANK.__getitem__)
-    return worst, sum(1 for s in statuses if s != NORMAL)
+    return worst, statuses.count(worst)
 
 
 def _room_detail(ctx: Context, place: Place, sensors: list[SensorTwin],
                  range_id: str) -> dict:
-    status, in_alert = _room_status(ctx, sensors)
+    status, at_worst = _room_status(ctx, sensors)
     label = STATUS_LABELS[status]
-    if in_alert:
-        label += f" · {_plural(in_alert, 'capteur')}"
+    if status != NORMAL:
+        label += f" · {_plural(at_worst, 'capteur')}"
     return {
         **_place_dict(place),
         "building": place.building,
