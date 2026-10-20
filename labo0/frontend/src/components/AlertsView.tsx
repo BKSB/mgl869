@@ -15,7 +15,6 @@ export function AlertsView({ data, onFilter, onAck }: Props) {
     <section className="content content--page">
       <h1 className="page-title">Alertes</h1>
       <p className="page-sub">
-        {data.alerts_enabled ? `Reçues en temps réel par WebSocket · ${data.summary}` : 'Alertes désactivées côté backend (aucun fichier de règles).'}
       </p>
       <div className="pills" role="group" aria-label="Filtre">
         {data.filters.map((f) => (
@@ -83,9 +82,7 @@ export function AlertsView({ data, onFilter, onAck }: Props) {
       ) : (
         <EmptyState text="Aucune alerte." />
       )}
-      <p className="footnote">
-        Le déclenchement, la sévérité et la résolution sont décidés par le backend. « Acquitter » envoie seulement l’action au backend.
-      </p>
+      
     </section>
   )
 }

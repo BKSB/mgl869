@@ -3,6 +3,7 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 import yaml
@@ -24,8 +25,10 @@ def create_app(service: StreamingService, alerts: AlertService,
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         service.start()
+        dashboard.start()
         yield
         await service.stop()
+        await dashboard.stop()
 
     app = FastAPI(title="gridd-kafka-consumer", lifespan=lifespan)
     app.state.streaming = service
@@ -67,7 +70,9 @@ def main() -> int:
                             for t in settings.topic_configs},
     )
     alerts = AlertService(settings.alerts)
-    dashboard = DashboardService(settings.topics, alerts)
+    dashboard = DashboardService(
+        settings.topics, alerts,
+        snapshot_path=Path(settings.output_dir) / "dashboard-history.json")
     service = StreamingService(settings, hub,
                                create_bus(hub, alerts, dashboard))
     uvicorn.run(create_app(service, alerts, dashboard), host="0.0.0.0",

@@ -313,12 +313,23 @@ AlertRule  { severity, direction, threshold, hysteresis }
 
 Le `DashboardService` (`app/services/dashboard_service.py`) est un observateur
 du bus : il alimente le jumeau numerique (`data_processing/digital_twin.py`,
-dernier etat et historique glissant de 24 h de chaque capteur, situe dans sa
-piece : `metadata.zone`, sinon `metadata.space`, avec `storey` et `building`)
-et pousse aux clients de `/ws/dashboard` des vues pretes a afficher
-(`data_processing/dashboard_views.py`, logique pure). Le frontend n'applique
-aucune regle : etats, libelles (« Normal », « Warning », « Erreur »), nombres
-formates, seuils, tris, comptes et notifications sont calcules ici.
+dernier etat de chaque capteur, situe dans sa piece : `metadata.zone`, sinon
+`metadata.space`, avec `storey` et `building` ; points bruts des dernieres
+24 h et agregats horaires -- nombre, somme, min, max -- des 30 derniers
+jours, en memoire bornee) et pousse aux clients de `/ws/dashboard` des vues
+pretes a afficher (`data_processing/dashboard_views.py`, logique pure). Le
+frontend n'applique aucune regle : etats, libelles (« Normal », « Warning »,
+« Erreur »), nombres formates, seuils, tris, comptes et notifications sont
+calcules ici.
+
+Chaque record n'est compte qu'une fois par capteur (`records.SeenOffsets` :
+offsets vus par partition, en intervalles), quel que soit l'ordre d'arrivee
+du prechauffage, du temps reel et d'un rattrapage. L'historique est
+sauvegarde toutes les 10 minutes et a l'arret dans
+`OUTPUT_DIR/dashboard-history.json` (ecriture atomique) et recharge au
+demarrage : le graphe sur 30 jours survit aux redemarrages et se complete au
+fil de l'eau (apres un premier demarrage, il ne contient que le prechauffage
+Kafka, soit `warmup_messages` par partition).
 
 Protocole de `/ws/dashboard` : le client envoie en JSON les parametres de
 l'ecran qu'il affiche, le backend repond aussitot par la vue complete, puis la
@@ -331,22 +342,39 @@ notification. `GET /api/dashboard?view=...` rend la meme vue sans abonnement
 Parametres  { view: "rooms",  room?: <id>,     range?: "15m"|"1h"|"24h" }
             { view: "metric", metric?: <id>,   range?, sort?: "severity"|"room"|"value" }
             { view: "alerts", filter?: "active"|"acknowledged"|"resolved"|"all" }
+            { view: "chart",  metric: <id>, sensor: <id>, range?: "24h"|"7d"|"30d",
+              from?: <ms>, to?: <ms> (fenetre de zoom, bornee a la plage) }
             (valeur absente ou inconnue : defaut ; premiere piece, premier topic)
 
-Vue         { type: "view", site (batiment), alerts_enabled, alerts_active (non acquittees),
-              ranges: [{ id, label }], view, ... }
+Vue         { type: "view", site ("Local A-1540" : metadata.space, sinon le batiment),
+              people: { count_text, label, updated_ms } | null (somme des capteurs
+              d'occupation, datee de la mesure la plus recente),
+              alerts_enabled, alerts_active (non acquittees), ranges: [{ id, label }],
+              view, ... }
   rooms     rooms: [{ id, name, floor, status }],
             room: { id, name, floor, building, status, status_label, summary, last_ms,
                     range, sensors: [Tuile] } | null (piece inconnue)
-  metric    metrics: [{ id, label }] (onglets, ordre de topics.yaml),
+  metric    metrics: [{ id, label }] (onglets, ordre de topics.yaml, sans l'occupation :
+                                      elle n'apparait que dans people),
             metric: { id, label, unit, thresholds, summary, counts: [{ status, text }],
                       range, sort, sorts: [{ id, label }], sensors: [Tuile] }
   alerts    filter, filters: [{ id, label, count }], summary,
             alerts: [{ id, key, severity, severity_label, room, metric_label, sensor_id,
                        value_text, threshold_text, since_ms, state, state_label,
                        state_ms, can_ack }]
+  chart     chart: { metric, label, unit, sensor_id, room, value_text, status, updated_ms,
+                     range, range_label, ranges, overview_label, span: [debut, fin],
+                     zoom: [debut, fin] | null, thresholds,
+                     series: [[debut de case, moyenne, status, moyenne formatee]]
+                       (toute la plage : cases de 10 min sur 24 h, horaires au-dela),
+                     stats: { scope: "zoom" | libelle de la plage,
+                              min/max: { text, status }, mean: { text },
+                              alerts: [{ status, text }] (episodes touchant la fenetre,
+                              d'apres les 200 derniers evenements) } | null,
+                     csv_url } | null (capteur inconnu)
 Tuile       { id, metric, label, unit, room: { id, name, floor }, value_text, status,
-              status_label, updated_ms, thresholds: [{ severity, value, text, short }],
+              status_label, updated_ms,
+              thresholds: [{ severity, direction, value, text, short, label }],
               points: [[t_ms, valeur]] (120 au plus), stats_text ("1 h : min … · max …") }
 Toast       { type: "toast", id, severity, severity_label, at_ms, title, value_text, text,
               alert_id, room_id }
@@ -354,7 +382,11 @@ Toast       { type: "toast", id, severity, severity_label, at_ms, title, value_t
 
 `status` vaut `normal`, `warning` ou `critical` ; l'etat d'une piece est le
 pire de ses capteurs. Une alerte est `active`, `acknowledged` ou `resolved`
-(les resolues viennent des 200 derniers evenements).
+(les resolues viennent des 200 derniers evenements). Les capteurs sans lieu
+(camera d'occupation : `metadata` sans `zone` ni `space`) sont regroupes sous
+la piece `_sans_piece` (« Sans pièce »), absente du menu `rooms` mais rendue
+quand elle est demandee par son id. Les unites des payloads sont traduites
+pour l'affichage (`C` -> `°C`, `person` -> rien).
 
 ### Fichiers d'environnement
 
@@ -388,6 +420,7 @@ pour tous les capteurs, meme les plus lents.
 | `GET http://localhost:8000/api/alerts` | Alertes actives, evenements recents et regles par topic |
 | `POST http://localhost:8000/api/alerts/<id>/acknowledge` | Acquitte une alerte active (`{ "by": "<nom>" }`) |
 | `GET http://localhost:8000/api/dashboard?view=...` | Une vue du dashboard, sans abonnement |
+| `GET http://localhost:8000/api/chart.csv?metric=&sensor=&range=&from=&to=` | Cases du graphe (fenetre de zoom comprise) en CSV |
 | `GET http://localhost:8000/health` | Etat du service et de chaque consommateur |
 
 Exemple cote frontend (React) :

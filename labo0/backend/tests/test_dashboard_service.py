@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 
@@ -145,6 +146,57 @@ class TestViews:
         bus.subscribe(service)
         await bus.publish(CO2, make_measurement(400, timestamp_ms=NOW), replay=True)
         assert service.render({})["room"]["sensors"][0]["value_text"] == "400"
+
+
+class TestSnapshot:
+    async def test_saved_on_stop_and_restored(self, alerts, tmp_path):
+        path = tmp_path / "history.json"
+        service = DashboardService([CO2], alerts, clock=lambda: NOW,
+                                   snapshot_path=path)
+        await service.on_record(CO2, make_measurement(400, timestamp_ms=NOW,
+                                                      offset=1), replay=True)
+        service.start()
+        await service.stop()
+        assert path.is_file()
+
+        restored = DashboardService([CO2], alerts, clock=lambda: NOW,
+                                    snapshot_path=path)
+        tile = restored.render({"view": "rooms"})["room"]["sensors"][0]
+        assert (tile["value_text"], tile["points"]) == ("400", [[NOW, 400.0]])
+        # Offset deja vu avant l'arret : rejete apres la restauration
+        await restored.on_record(CO2, make_measurement(999, timestamp_ms=NOW + 1,
+                                                       offset=1), replay=False)
+        assert restored.render({"view": "rooms"})["room"]["sensors"][0][
+            "value_text"] == "400"
+
+    async def test_without_path(self, service):
+        service.start()
+        assert service._saver is None
+        await service.stop()  # sans erreur
+
+    async def test_autosave(self, alerts, tmp_path):
+        path = tmp_path / "history.json"
+        service = DashboardService([CO2], alerts, snapshot_path=path)
+        service.SNAPSHOT_INTERVAL_S = 0.01
+        service.start()
+        service.start()  # idempotent
+        await asyncio.sleep(0.1)
+        assert path.is_file()
+        await service.stop()
+
+    def test_unreadable_snapshot_logged(self, alerts, tmp_path, caplog):
+        path = tmp_path / "history.json"
+        path.write_text("{pas du json", encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            service = DashboardService([CO2], alerts, snapshot_path=path)
+        assert "illisible" in caplog.text
+        assert service.render({"view": "rooms"})["rooms"] == []
+
+    async def test_save_failure_logged(self, alerts, tmp_path, caplog):
+        service = DashboardService([CO2], alerts, snapshot_path=tmp_path)
+        with caplog.at_level(logging.WARNING):
+            await service.save_snapshot()  # cible : un dossier
+        assert "non sauvegarde" in caplog.text
 
 
 class TestAlertNotifications:

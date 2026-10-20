@@ -23,12 +23,16 @@ relaie `/api/`, `/health` et `/ws/` vers le backend du `docker-compose`).
 | Route | Écran | Contrôles envoyés au backend |
 |---|---|---|
 | `#/rooms/<id>` | **Par pièce** : liste des pièces (état, étage), détail de la pièce choisie, une tuile par capteur | pièce, plage (15 min, 1 h, 24 h) |
-| `#/metrics/<id>` | **Par capteur** : un type de capteur dans toutes les pièces | type, plage, tri (sévérité, pièce, valeur) |
+| `#/metrics/<id>` | **Par capteur** : un type de capteur dans | type, plage, tri (sévérité, pièce, valeur) |
 | `#/alerts` | **Alertes** : table des alertes avec état | filtre (actives, acquittées, résolues, toutes) |
+| `#/chart/<métrique>/<capteur>` | **Graphe plein écran** (clic sur une tuile de pièce) : série, seuils, statistiques et alertes de la fenêtre, aperçu avec fenêtre de zoom, export CSV | plage (24 h, 7 j, 30 j), fenêtre de zoom (`from`, `to`) |
 
-Le badge « Alertes » de la barre compte les alertes actives non acquittées ;
-la pastille de droite indique l'état du WebSocket. Les notifications (toasts)
-arrivent du backend pour chaque alerte déclenchée ou escaladée.
+La barre affiche le local (`site`), le nombre de personnes présentes
+(`people`, somme des capteurs d'occupation, avec l'âge de la dernière mesure),
+le badge « Alertes » (alertes actives non acquittées) et l'état du WebSocket.
+Les notifications (toasts) arrivent du backend pour chaque alerte déclenchée
+ou escaladée. L'occupation n'a ni pièce dans le menu (la caméra n'a pas de
+lieu) ni onglet dans Par capteur : elle n'existe que dans l'en-tête.
 
 ## Fonctionnement
 
@@ -37,9 +41,13 @@ arrivent du backend pour chaque alerte déclenchée ou escaladée.
   toutes les 3 s) et remplace l'état affiché par chaque vue reçue. Le backend
   renvoie la vue complète : pièces, états, libellés, seuils, nombres formatés,
   tris, comptes (voir le README du projet, section « Dashboard »).
-- Le client ne calcule que deux choses : les heures (`format.ts`, fuseau du
-  navigateur : `HH:mm:ss`, « il y a 2 s ») et les coordonnées des sparklines
-  (`Sparkline.tsx`, à partir des points et des seuils fournis).
+- Le client ne calcule que le rendu : les heures et dates (`format.ts`,
+  fuseau du navigateur), les coordonnées des sparklines et du graphe
+  (`Sparkline.tsx`, `TimeChart.tsx`, à partir des points et des seuils
+  fournis) et les graduations des axes (`ticks.ts`). Le zoom du graphe
+  (glisser sur le graphe, fenêtre de l'aperçu `Overview.tsx`, boutons ±) ne
+  fait que filtrer la série affichée ; ses bornes sont envoyées au backend, qui
+  renvoie les statistiques et le nombre d'alertes de la fenêtre.
 - Une seule action : « Acquitter » (`api.ts`, `POST /api/alerts/<id>/acknowledge`).
   Le nom de l'opérateur est demandé une fois puis gardé dans `localStorage`
   (`gridd.operator`). Le backend décide du déclenchement, de la sévérité et de
@@ -53,5 +61,6 @@ arrivent du backend pour chaque alerte déclenchée ou escaladée.
 | `route.ts` | `#/rooms/<id>`, `#/metrics/<id>`, `#/alerts` |
 | `useDashboard.ts`, `useNow.ts` | WebSocket du dashboard ; horloge des « il y a n s » |
 | `types.ts` | Forme des vues et des notifications reçues |
-| `components/` | `Header`, `RoomsView`, `MetricView`, `AlertsView`, `SensorTile`, `Sparkline`, `Toasts`, badges et contrôles (`StatusBadge.tsx`) |
+| `ticks.ts`, `useWidth.ts` | Graduations « rondes » des axes ; largeur rendue des graphes SVG |
+| `components/` | `Header`, `RoomsView`, `MetricView`, `AlertsView`, `ChartView` (+ `TimeChart`, `Overview`), `SensorTile`, `Sparkline`, `Toasts`, badges et contrôles (`StatusBadge.tsx`) |
 | `index.css` | Thème sombre (maquettes), aucune ressource externe |

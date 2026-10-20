@@ -5,6 +5,8 @@ import type { ConnectionStatus, DashboardMessage, Toast, View, ViewParams } from
 const RECONNECT_DELAY_MS = 3000
 const TOAST_TTL_MS = 15_000
 const TOAST_MAX = 4
+/** Un zoom qui glisse change les parametres plusieurs fois par seconde */
+const SEND_DEBOUNCE_MS = 60
 
 export interface Dashboard {
   status: ConnectionStatus
@@ -74,7 +76,10 @@ export function useDashboard(params: ViewParams): Dashboard {
 
   useEffect(() => {
     latest.current = paramsJson
-    if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(paramsJson)
+    const timer = window.setTimeout(() => {
+      if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(paramsJson)
+    }, SEND_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
   }, [paramsJson])
 
   return { status, view, toasts, dismiss }

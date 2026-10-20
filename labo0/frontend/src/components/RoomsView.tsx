@@ -1,5 +1,5 @@
 import { fmtTime } from '../format'
-import { roomHash } from '../route'
+import { chartHash, roomHash } from '../route'
 import type { RoomsData } from '../types'
 import { SensorTile } from './SensorTile'
 import { EmptyState, Segmented, StatusBadge, Thresholds } from './StatusBadge'
@@ -66,10 +66,11 @@ export function RoomsView({ data, range, onRange, now }: Props) {
                     )
                   }
                   now={now}
+                  href={chartHash(tile.metric, tile.id)}
                 />
               ))}
             </div>
-            <p className="footnote">Valeurs, seuils et états fournis par le backend · le frontend affiche seulement.</p>
+            <p className="footnote"></p>
           </>
         ) : (
           <EmptyState text={rooms.length > 0 ? 'Pièce introuvable.' : 'En attente des premières mesures…'} />

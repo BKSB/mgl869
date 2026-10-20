@@ -5,11 +5,14 @@ Parametres d'une vue (JSON du client ou query string) :
   view=rooms   room=<id>        range=15m|1h|24h
   view=metric  metric=<id>      range=15m|1h|24h   sort=severity|room|value
   view=alerts  filter=active|acknowledged|resolved|all
+  view=chart   metric=<id> sensor=<id> range=24h|7d|30d from=<ms> to=<ms>
 Valeur absente ou inconnue : defaut (premiere piece, premier topic...)."""
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from app.data_management.data_processing.alert_rules import (
     ABOVE,
@@ -22,10 +25,13 @@ from app.data_management.data_processing.alert_rules import (
     AlertRule,
 )
 from app.data_management.data_processing.digital_twin import (
+    HOUR_MS,
     NO_PLACE_ID,
     UNKNOWN_PLACE,
+    Bucket,
     Place,
     SensorTwin,
+    add_to_bucket,
 )
 from app.data_management.data_processing.formatting import (
     format_fixed,
@@ -55,6 +61,25 @@ STATE_RANK = {ACTIVE: 0, ACKNOWLEDGED: 1, RESOLVED_STATE: 2}
 FILTERS = {ACTIVE: "Actives", ACKNOWLEDGED: "Acquittées",
            RESOLVED_STATE: "Résolues", "all": "Toutes"}
 DEFAULT_FILTER = ACTIVE
+
+# Unites des payloads gridd -> affichage ; "person" : la valeur seule suffit
+UNIT_LABELS = {"C": "°C", "degC": "°C", "person": "", "persons": ""}
+# Metrique sommee dans l'en-tete (« n personnes dans le local »)
+PEOPLE_METRIC = "occupancy"
+
+# Plage du graphe plein ecran : libelle, duree, case d'agregation, titre de
+# l'apercu. Au-dela de 24 h, les cases sont les agregats horaires du jumeau.
+CHART_RANGES = {
+    "24h": ("24 h", 24 * HOUR_MS, 10 * 60_000, "24 dernières heures"),
+    "7d": ("7 j", 7 * 24 * HOUR_MS, HOUR_MS, "7 derniers jours"),
+    "30d": ("30 j", 30 * 24 * HOUR_MS, HOUR_MS, "30 derniers jours"),
+}
+DEFAULT_CHART_RANGE = "30d"
+MIN_ZOOM_MS = 60_000
+
+
+def _unit(raw: str) -> str:
+    return UNIT_LABELS.get(raw, raw)
 
 
 @dataclass(frozen=True)
@@ -100,15 +125,24 @@ def _fallback_place(alert: Alert) -> Place:
 
 def _thresholds(rules: Sequence[AlertRule], unit: str) -> list[dict]:
     """`text` avec unite (en-tete), `short` sans (pied de tuile, l'unite est
-    deja a cote de la valeur)."""
+    deja a cote de la valeur), `label` pour la ligne du graphe."""
     return [{
         "severity": rule.severity,
+        "direction": rule.direction,
         "value": rule.threshold,
         "text": f"{SEVERITY_CODES[rule.severity]} {_symbol(rule.direction)} "
                 f"{format_quantity(rule.threshold, unit)}",
         "short": f"{SEVERITY_CODES[rule.severity]} {_symbol(rule.direction)} "
                  f"{format_number(rule.threshold)}",
+        "label": f"Seuil {STATUS_LABELS[rule.severity].lower()} "
+                 f"{format_number(rule.threshold)}",
     } for rule in rules]
+
+
+def _value_status(rules: Sequence[AlertRule], value: float) -> str:
+    """Severite des regles franchies par une valeur (sans hysteresis)."""
+    crossed = [r.severity for r in rules if r.is_active(value, False)]
+    return max(crossed, key=STATUS_RANK.__getitem__, default=NORMAL)
 
 
 def _downsample(points: Sequence[tuple[int, float]]) -> list[list]:
@@ -125,6 +159,7 @@ def _tile(ctx: Context, sensor: SensorTwin, range_id: str) -> dict:
     points = sensor.window(ctx.now_ms - span_ms)
     values = [v for _, v in points]
     status = ctx.status(sensor)
+    unit = _unit(sensor.unit)
     stats = ""
     if values:
         stats = (f"{range_label} : min {format_fixed(min(values), metric.decimals)}"
@@ -133,13 +168,13 @@ def _tile(ctx: Context, sensor: SensorTwin, range_id: str) -> dict:
         "id": sensor.id,
         "metric": metric.id,
         "label": metric.label,
-        "unit": sensor.unit,
+        "unit": unit,
         "room": _place_dict(sensor.place),
         "value_text": format_fixed(sensor.value, metric.decimals),
         "status": status,
         "status_label": STATUS_LABELS[status],
         "updated_ms": sensor.updated_ms,
-        "thresholds": _thresholds(ctx.rules.get(sensor.topic, ()), sensor.unit),
+        "thresholds": _thresholds(ctx.rules.get(sensor.topic, ()), unit),
         "points": _downsample(points),
         "stats_text": stats,
     }
@@ -191,16 +226,19 @@ def _room_detail(ctx: Context, place: Place, sensors: list[SensorTwin],
 
 def rooms_view(ctx: Context, params: Mapping) -> dict:
     rooms = _rooms(ctx)
+    # Capteurs sans piece (ex. camera d'occupation) : hors menu, mais la
+    # « piece » reste accessible par son id (tuile Par capteur, Voir la piece)
+    listed = [r for r in rooms if r[0].id != NO_PLACE_ID]
     wanted = params.get("room")
     if wanted:
         selected = next((r for r in rooms if r[0].id == wanted), None)
     else:
-        selected = rooms[0] if rooms else None
+        selected = listed[0] if listed else None
     range_id = _choice(params, "range", RANGES, DEFAULT_RANGE)
     return {
         "view": "rooms",
         "rooms": [{**_place_dict(place), "status": _room_status(ctx, sensors)[0]}
-                  for place, sensors in rooms],
+                  for place, sensors in listed],
         "room": _room_detail(ctx, *selected, range_id) if selected else None,
     }
 
@@ -221,11 +259,13 @@ def _sort_key(ctx: Context, sort: str) -> Callable[[SensorTwin], tuple]:
 
 
 def metric_view(ctx: Context, params: Mapping) -> dict:
+    # Occupation : resumee dans l'en-tete (people), pas d'onglet
+    topics = [t for t in ctx.topics if metric_for(t).id != PEOPLE_METRIC]
     tabs = [{"id": metric_for(t).id, "label": metric_for(t).label}
-            for t in ctx.topics]
+            for t in topics]
     wanted = params.get("metric")
-    topic = next((t for t in ctx.topics if metric_for(t).id == wanted), None) \
-        or (ctx.topics[0] if ctx.topics else None)
+    topic = next((t for t in topics if metric_for(t).id == wanted), None) \
+        or (topics[0] if topics else None)
     if topic is None:
         return {"view": "metric", "metrics": tabs, "metric": None}
     metric = metric_for(topic)
@@ -233,7 +273,7 @@ def metric_view(ctx: Context, params: Mapping) -> dict:
     sort = _choice(params, "sort", SORTS, DEFAULT_SORT)
     sensors = sorted((s for s in ctx.sensors if s.topic == topic),
                      key=_sort_key(ctx, sort))
-    unit = next((s.unit for s in sensors if s.unit), "")
+    unit = _unit(next((s.unit for s in sensors if s.unit), ""))
     counts = Counter(ctx.status(s) for s in sensors)
     return {
         "view": "metric",
@@ -257,8 +297,13 @@ def metric_view(ctx: Context, params: Mapping) -> dict:
 # --- Alertes -----------------------------------------------------------------
 
 def _measured(alert: Alert) -> str:
-    return format_measured(alert.value, alert.unit, alert.threshold,
+    return format_measured(alert.value, _unit(alert.unit), alert.threshold,
                            decimals=metric_for(alert.topic).decimals)
+
+
+def _threshold_text(alert: Alert) -> str:
+    return (f"{SEVERITY_CODES[alert.severity]} {_symbol(alert.direction)} "
+            f"{format_quantity(alert.threshold, _unit(alert.unit))}")
 
 
 def _alert_row(alert: Alert, place: Place, state: str,
@@ -279,9 +324,7 @@ def _alert_row(alert: Alert, place: Place, state: str,
         "metric_label": metric_for(alert.topic).label,
         "sensor_id": alert.node_id,
         "value_text": _measured(alert),
-        "threshold_text": f"{SEVERITY_CODES[alert.severity]} "
-                          f"{_symbol(alert.direction)} "
-                          f"{format_quantity(alert.threshold, alert.unit)}",
+        "threshold_text": _threshold_text(alert),
         "since_ms": alert.since_ms,
         "state": state,
         "state_label": state_label,
@@ -322,6 +365,174 @@ def alerts_view(ctx: Context, params: Mapping) -> dict:
     }
 
 
+# --- Graphe plein ecran ------------------------------------------------------
+
+def _int_param(params: Mapping, key: str) -> int | None:
+    value = params.get(key)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
+    return None
+
+
+def _zoom(params: Mapping, from_ms: int, to_ms: int) -> tuple[int, int] | None:
+    """Fenetre [from, to] bornee a la plage ; None si absente, trop etroite
+    ou egale a la plage."""
+    a, b = _int_param(params, "from"), _int_param(params, "to")
+    if a is None or b is None:
+        return None
+    a, b = max(a, from_ms), min(b, to_ms)
+    if b - a < MIN_ZOOM_MS or (a, b) == (from_ms, to_ms):
+        return None
+    return a, b
+
+
+def _buckets(sensor: SensorTwin, from_ms: int,
+             bucket_ms: int) -> list[tuple[int, Bucket]]:
+    """Cases de la plage : agregats horaires du jumeau, ou points bruts
+    regroupes (plage 24 h)."""
+    if bucket_ms >= HOUR_MS:
+        return sensor.hours_since(from_ms)
+    buckets: dict[int, Bucket] = {}
+    for t, v in sensor.window(from_ms):
+        start = t - t % bucket_ms
+        buckets[start] = add_to_bucket(buckets.get(start), v)
+    return sorted(buckets.items())
+
+
+def _alert_counts(ctx: Context, sensor: SensorTwin, a: int, b: int) -> list[dict]:
+    """Episodes d'alerte du capteur touchant la fenetre (evenements recents
+    et alerte active), par severite maximale atteinte."""
+    key = (sensor.topic, sensor.id)
+    episodes: dict[int, str] = {}
+
+    def note(alert: Alert, at_ms: int) -> None:
+        if (alert.topic, alert.node_id) == key and a <= at_ms <= b:
+            episodes[alert.since_ms] = max(
+                episodes.get(alert.since_ms, alert.severity), alert.severity,
+                key=STATUS_RANK.__getitem__)
+
+    for event in ctx.recent:
+        note(event.alert, event.at_ms)
+    active = ctx.alerts.get(key)
+    if active:
+        note(active, active.updated_ms)
+    counts = Counter(episodes.values())
+    items = [{"status": s, "text": f"{counts[s]} {STATUS_LABELS[s].lower()}"}
+             for s in (WARNING, CRITICAL) if counts[s]]
+    return items or [{"status": NORMAL, "text": "aucune"}]
+
+
+@dataclass(frozen=True)
+class _ChartData:
+    sensor: SensorTwin
+    range_id: str
+    span: tuple[int, int]
+    zoom: tuple[int, int] | None
+    buckets: list[tuple[int, Bucket]]
+
+    @property
+    def window(self) -> tuple[int, int]:
+        return self.zoom or self.span
+
+    def visible(self) -> list[tuple[int, Bucket]]:
+        a, b = self.window
+        return [(t, bk) for t, bk in self.buckets if a <= t <= b]
+
+
+def _chart_data(ctx: Context, params: Mapping) -> _ChartData | None:
+    metric_id, sensor_id = params.get("metric"), params.get("sensor")
+    topic = next((t for t in ctx.topics if metric_for(t).id == metric_id), None)
+    sensor = next((s for s in ctx.sensors
+                   if s.topic == topic and s.id == sensor_id), None)
+    if sensor is None:
+        return None
+    range_id = _choice(params, "range", CHART_RANGES, DEFAULT_CHART_RANGE)
+    _, span_ms, bucket_ms, _ = CHART_RANGES[range_id]
+    to_ms = ctx.now_ms
+    from_ms = to_ms - span_ms
+    return _ChartData(sensor, range_id, (from_ms, to_ms),
+                      _zoom(params, from_ms, to_ms),
+                      _buckets(sensor, from_ms, bucket_ms))
+
+
+def _chart_stats(ctx: Context, data: _ChartData, rules: Sequence[AlertRule],
+                 decimals: int) -> dict | None:
+    visible = data.visible()
+    if not visible:
+        return None
+    count = sum(bk[0] for _, bk in visible)
+    total = sum(bk[1] for _, bk in visible)
+    low = min(bk[2] for _, bk in visible)
+    high = max(bk[3] for _, bk in visible)
+    return {
+        "scope": "zoom" if data.zoom else CHART_RANGES[data.range_id][0],
+        "min": {"text": format_fixed(low, decimals),
+                "status": _value_status(rules, low)},
+        "max": {"text": format_fixed(high, decimals),
+                "status": _value_status(rules, high)},
+        "mean": {"text": format_fixed(total / count, decimals)},
+        "alerts": _alert_counts(ctx, data.sensor, *data.window),
+    }
+
+
+def chart_view(ctx: Context, params: Mapping) -> dict:
+    data = _chart_data(ctx, params)
+    if data is None:
+        return {"view": "chart", "chart": None}
+    sensor = data.sensor
+    metric = metric_for(sensor.topic)
+    unit = _unit(sensor.unit)
+    rules = ctx.rules.get(sensor.topic, ())
+    range_label, _, _, overview_label = CHART_RANGES[data.range_id]
+    query = {"metric": metric.id, "sensor": sensor.id, "range": data.range_id}
+    if data.zoom:
+        query["from"], query["to"] = data.zoom
+    return {
+        "view": "chart",
+        "chart": {
+            "metric": metric.id,
+            "label": metric.label,
+            "unit": unit,
+            "sensor_id": sensor.id,
+            "room": _place_dict(sensor.place),
+            "value_text": format_fixed(sensor.value, metric.decimals),
+            "status": ctx.status(sensor),
+            "updated_ms": sensor.updated_ms,
+            "range": data.range_id,
+            "range_label": range_label,
+            "ranges": [{"id": k, "label": v[0]} for k, v in CHART_RANGES.items()],
+            "overview_label": overview_label,
+            "span": list(data.span),
+            "zoom": list(data.zoom) if data.zoom else None,
+            "thresholds": _thresholds(rules, unit),
+            # [debut de case, moyenne, etat, moyenne formatee]
+            "series": [[t, bk[1] / bk[0], _value_status(rules, bk[1] / bk[0]),
+                        format_fixed(bk[1] / bk[0], metric.decimals)]
+                       for t, bk in data.buckets],
+            "stats": _chart_stats(ctx, data, rules, metric.decimals),
+            "csv_url": f"/api/chart.csv?{urlencode(query)}",
+        },
+    }
+
+
+def chart_csv(ctx: Context, params: Mapping) -> tuple[str, str] | None:
+    """Cases affichees (fenetre de zoom comprise) : (nom de fichier, CSV)."""
+    data = _chart_data(ctx, params)
+    if data is None:
+        return None
+    lines = ["timestamp_ms,datetime_utc,mean,min,max,count"]
+    for t, (count, total, low, high) in data.visible():
+        when = datetime.fromtimestamp(t / 1000, tz=timezone.utc)
+        lines.append(f"{t},{when.isoformat(timespec='minutes')},"
+                     f"{round(total / count, 3)},{low},{high},{int(count)}")
+    name = f"{metric_for(data.sensor.topic).id}-{data.sensor.id}-{data.range_id}.csv"
+    return name, "\n".join(lines) + "\n"
+
+
 def toast(event: AlertEvent, place: Place | None) -> dict:
     """Notification d'une alerte declenchee ou escaladee."""
     alert = event.alert
@@ -336,7 +547,7 @@ def toast(event: AlertEvent, place: Place | None) -> dict:
         "title": f"{metric_for(alert.topic).label} · {place.name}",
         "value_text": _measured(alert),
         "text": f"{_symbol(alert.direction)} seuil {label.lower()} "
-                f"{format_quantity(alert.threshold, alert.unit)}",
+                f"{format_quantity(alert.threshold, _unit(alert.unit))}",
         "alert_id": alert.id,
         "room_id": place.id,
     }
@@ -344,16 +555,41 @@ def toast(event: AlertEvent, place: Place | None) -> dict:
 
 # --- Enveloppe ---------------------------------------------------------------
 
-VIEWS = {"rooms": rooms_view, "metric": metric_view, "alerts": alerts_view}
+VIEWS = {"rooms": rooms_view, "metric": metric_view, "alerts": alerts_view,
+         "chart": chart_view}
+
+
+def _site(ctx: Context) -> str:
+    """« Local A-1540 » (metadata.space), sinon le batiment, sinon vide."""
+    spaces = sorted({s.place.space for s in ctx.sensors if s.place.space})
+    if spaces:
+        return ("Local " if len(spaces) == 1 else "Locaux ") + ", ".join(spaces)
+    return ", ".join(sorted({s.place.building for s in ctx.sensors
+                             if s.place.building}))
+
+
+def _people(ctx: Context) -> dict | None:
+    """Somme des capteurs d'occupation, datee de la mesure la plus recente."""
+    sensors = [s for s in ctx.sensors
+               if metric_for(s.topic).id == PEOPLE_METRIC]
+    if not sensors:
+        return None
+    total = round(sum(s.value for s in sensors))
+    return {
+        "count_text": format_fixed(total, 0),
+        "label": f"personne{'s' if total > 1 else ''} dans le local",
+        "updated_ms": max(s.updated_ms for s in sensors),
+    }
 
 
 def render(ctx: Context, params: Mapping) -> dict:
-    """En-tete commun (site, badge des alertes non acquittees, plages) et vue."""
+    """En-tete commun (local, personnes presentes, badge des alertes non
+    acquittees, plages) et vue."""
     view = _choice(params, "view", VIEWS, "rooms")
     return {
         "type": "view",
-        "site": ", ".join(sorted({s.place.building for s in ctx.sensors
-                                  if s.place.building})),
+        "site": _site(ctx),
+        "people": _people(ctx),
         "alerts_enabled": ctx.alerts_enabled,
         "alerts_active": sum(1 for a in ctx.alerts.values()
                              if a.acknowledged_ms is None),

@@ -6,7 +6,7 @@ import json
 import time
 from collections.abc import Callable
 
-from fastapi import APIRouter, Body, HTTPException, Request, WebSocket
+from fastapi import APIRouter, Body, HTTPException, Request, Response, WebSocket
 from starlette.requests import HTTPConnection
 
 from app.services.alert_service import AlertService
@@ -73,9 +73,22 @@ async def acknowledge_alert(alert_id: str, request: Request,
 
 @router.get("/api/dashboard")
 async def dashboard(request: Request) -> dict:
-    """Vue du dashboard (view=rooms|metric|alerts, room, metric, range, sort,
-    filter) : la meme que /ws/dashboard pousse, sans abonnement."""
+    """Vue du dashboard (view=rooms|metric|alerts|chart, room, metric, sensor,
+    range, sort, filter, from, to) : la meme que /ws/dashboard pousse, sans
+    abonnement."""
     return _dashboard(request).render(dict(request.query_params))
+
+
+@router.get("/api/chart.csv")
+async def chart_csv(request: Request) -> Response:
+    """Cases affichees par le graphe plein ecran (metric, sensor, range, from,
+    to), en CSV ; 404 si le capteur est inconnu."""
+    result = _dashboard(request).chart_csv(dict(request.query_params))
+    if result is None:
+        raise HTTPException(status_code=404, detail="capteur inconnu")
+    filename, text = result
+    return Response(text, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 async def _forward(queue: asyncio.Queue, websocket: WebSocket) -> None:

@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { fmtAgo, fmtTime } from './format'
+import { fmtAgo, fmtDayTime, fmtPointTime, fmtTickDay, fmtTickTime, fmtTime } from './format'
 
 describe('fmtTime', () => {
   it('renders HH:mm:ss in local time', () => {
     expect(fmtTime(new Date(2026, 9, 20, 14, 32, 5).getTime())).toBe('14:32:05')
     expect(fmtTime(new Date(2026, 9, 20, 0, 0, 0).getTime())).toBe('00:00:00')
+  })
+})
+
+describe('chart date formats', () => {
+  const tuesday = new Date(2026, 9, 13, 13, 0, 0).getTime()
+
+  it('renders ticks, zoom bounds and tooltip dates in French', () => {
+    expect(fmtTickTime(tuesday)).toBe('13:00')
+    expect(fmtTickDay(tuesday)).toMatch(/^mar\.? 13$/)
+    expect(fmtDayTime(tuesday)).toMatch(/^13 oct\.? 13:00$/)
+    expect(fmtPointTime(tuesday)).toMatch(/^mar\.? 13 oct\.? · 13:00$/)
   })
 })
 

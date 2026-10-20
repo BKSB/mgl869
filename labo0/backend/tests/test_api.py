@@ -294,6 +294,24 @@ class TestDashboard:
         assert metric_view["metric"]["id"] == "b"
         assert metric_view["metric"]["sensors"] == []
 
+    def test_chart_csv(self, client):
+        publish_measurement(client, 400, ts=now_ms(), offset=1)
+
+        response = client.get("/api/chart.csv", params={
+            "metric": "a", "sensor": "n1", "range": "24h"})
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert response.headers["content-disposition"] == \
+            'attachment; filename="a-n1-24h.csv"'
+        lines = response.text.splitlines()
+        assert lines[0] == "timestamp_ms,datetime_utc,mean,min,max,count"
+        assert len(lines) == 2 and lines[1].endswith(",400.0,400.0,400.0,1")
+
+    def test_chart_csv_unknown_sensor(self, client):
+        response = client.get("/api/chart.csv", params={"metric": "a", "sensor": "x"})
+        assert response.status_code == 404
+
     def test_websocket_ignores_invalid_messages(self, client):
         with client.websocket_connect("/ws/dashboard") as ws:
             ws.send_text("pas du json")
