@@ -3,22 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Console temps réel des capteurs IoT du campus (gridd)" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#f9f9f7" />
+    <meta name="description" content="Jumeau numérique des capteurs IoT du campus (gridd) : pièces, capteurs, alertes" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0f1216" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>gridd — Capteurs du campus</title>
-    <script>
-      // Theme applique avant le module (aucun flash) ; cle et couleurs : cf. useTheme.ts
-      (function () {
-        var el = document.documentElement, t = null;
-        try { t = localStorage.getItem('gridd.theme'); } catch (e) {}
-        if (t === 'light' || t === 'dark') el.dataset.theme = t;
-        var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
-        var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute('content', dark ? '#0d0d0d' : '#f9f9f7');
-      })();
-    </script>
+    <title>Jumeau numérique — gridd</title>
   </head>
   <body>
     <div id="root"></div>

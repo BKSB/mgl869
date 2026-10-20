@@ -12,10 +12,11 @@ from app.data_management.data_processing.formatting import (
 )
 from app.data_management.records import sensor_id
 
-# Contrat de l'API et de alerts.yaml : memes unions que frontend/src/types.ts
+# Contrat de l'API et de alerts.yaml
 Severity = Literal["warning", "critical"]
 Direction = Literal["above", "below"]
-EventKind = Literal["raised", "escalated", "deescalated", "resolved"]
+EventKind = Literal["raised", "escalated", "deescalated", "resolved",
+                    "acknowledged"]
 
 WARNING: Severity = "warning"
 CRITICAL: Severity = "critical"
@@ -30,6 +31,7 @@ RAISED: EventKind = "raised"
 ESCALATED: EventKind = "escalated"
 DEESCALATED: EventKind = "deescalated"
 RESOLVED: EventKind = "resolved"
+ACKNOWLEDGED: EventKind = "acknowledged"
 
 
 def is_number(value: object) -> bool:
@@ -151,6 +153,9 @@ class Alert:
     since_ms: int
     updated_ms: int
     message: str
+    # Acquittement (AlertService.acknowledge), conserve jusqu'a la resolution
+    acknowledged_by: str = ""
+    acknowledged_ms: int | None = None
 
     @property
     def id(self) -> str:
@@ -172,6 +177,8 @@ class Alert:
             "since_ms": self.since_ms,
             "updated_ms": self.updated_ms,
             "message": self.message,
+            "acknowledged_by": self.acknowledged_by,
+            "acknowledged_ms": self.acknowledged_ms,
         }
 
 
@@ -232,6 +239,8 @@ def evaluate(rules: Sequence[AlertRule], measurement: Measurement,
         since_ms=previous.since_ms if continued else at_ms,
         updated_ms=at_ms,
         message=alert_message(measurement.topic, rule, value, measurement.unit),
+        acknowledged_by=previous.acknowledged_by if continued else "",
+        acknowledged_ms=previous.acknowledged_ms if continued else None,
     )
 
     events: list[AlertEvent] = []

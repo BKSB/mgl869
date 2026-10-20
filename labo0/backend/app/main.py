@@ -13,12 +13,14 @@ from app.config import Settings
 from app.data_management.data_distribution.websocket_hub import TopicHub
 from app.data_management.record_bus import RecordBus
 from app.services.alert_service import AlertService
+from app.services.dashboard_service import DashboardService
 from app.services.streaming_service import StreamingService
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(service: StreamingService, alerts: AlertService) -> FastAPI:
+def create_app(service: StreamingService, alerts: AlertService,
+               dashboard: DashboardService) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         service.start()
@@ -28,14 +30,17 @@ def create_app(service: StreamingService, alerts: AlertService) -> FastAPI:
     app = FastAPI(title="gridd-kafka-consumer", lifespan=lifespan)
     app.state.streaming = service
     app.state.alerts = alerts
+    app.state.dashboard = dashboard
     app.include_router(router)
     return app
 
 
-def create_bus(hub: TopicHub, alerts: AlertService) -> RecordBus:
+def create_bus(hub: TopicHub, alerts: AlertService,
+               dashboard: DashboardService) -> RecordBus:
     """Seul point d'inscription des observateurs, notifies dans cet ordre."""
     bus = RecordBus()
     bus.subscribe(hub)  # 1er : le temps reel n'attend pas les alertes
+    bus.subscribe(dashboard)  # avant les alertes : la piece est connue au toast
     bus.subscribe(alerts)
     return bus
 
@@ -62,9 +67,11 @@ def main() -> int:
                             for t in settings.topic_configs},
     )
     alerts = AlertService(settings.alerts)
-    service = StreamingService(settings, hub, create_bus(hub, alerts))
-    uvicorn.run(create_app(service, alerts), host="0.0.0.0", port=8000,
-                log_config=None)
+    dashboard = DashboardService(settings.topics, alerts)
+    service = StreamingService(settings, hub,
+                               create_bus(hub, alerts, dashboard))
+    uvicorn.run(create_app(service, alerts, dashboard), host="0.0.0.0",
+                port=8000, log_config=None)
     return 0
 
 

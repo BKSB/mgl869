@@ -361,6 +361,8 @@ class TestSerialization:
                 "since_ms": 10,
                 "updated_ms": 10,
                 "message": f"CO\u2082 au-dessus de 1{G}000{F}ppm (1{G}120{F}ppm)",
+                "acknowledged_by": "",
+                "acknowledged_ms": None,
             },
         }
 

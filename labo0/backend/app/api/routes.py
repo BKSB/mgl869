@@ -1,12 +1,16 @@
-"""Couche API : HTTP/WebSocket <-> StreamingService et AlertService."""
+"""Couche API : HTTP/WebSocket <-> StreamingService, AlertService et
+DashboardService."""
 
 import asyncio
+import json
+import time
 from collections.abc import Callable
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, Body, HTTPException, Request, WebSocket
 from starlette.requests import HTTPConnection
 
 from app.services.alert_service import AlertService
+from app.services.dashboard_service import DashboardService
 from app.services.streaming_service import StreamingService
 
 router = APIRouter()
@@ -18,6 +22,10 @@ def _service(connection: HTTPConnection) -> StreamingService:
 
 def _alerts(connection: HTTPConnection) -> AlertService:
     return connection.app.state.alerts
+
+
+def _dashboard(connection: HTTPConnection) -> DashboardService:
+    return connection.app.state.dashboard
 
 
 @router.get("/health")
@@ -32,11 +40,12 @@ def topics(request: Request) -> dict:
                        for t in _service(request).topics()]}
 
 
+# Routes async, pas def : l'etat des services est lu dans la boucle asyncio
+# qui le modifie, pas dans un thread du pool
+
 @router.get("/api/alerts")
 async def alerts(request: Request) -> dict:
     """Alertes actives, evenements recents et regles par topic."""
-    # async, pas def : l'etat de l'AlertService est lu dans la boucle asyncio
-    # qui le modifie, pas dans un thread du pool
     service = _alerts(request)
     return {
         "enabled": service.enabled,
@@ -46,19 +55,47 @@ async def alerts(request: Request) -> dict:
     }
 
 
+@router.post("/api/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str, request: Request,
+                            body: dict | None = Body(default=None)) -> dict:
+    """Acquitte une alerte active ({ "by": "<nom>" }, optionnel) ; 404 si elle
+    n'est plus active, 409 si elle l'est deja."""
+    by = str((body or {}).get("by") or "").strip()
+    try:
+        alert = _alerts(request).acknowledge(alert_id, by,
+                                             at_ms=int(time.time() * 1000))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"alert": alert}
+
+
+@router.get("/api/dashboard")
+async def dashboard(request: Request) -> dict:
+    """Vue du dashboard (view=rooms|metric|alerts, room, metric, range, sort,
+    filter) : la meme que /ws/dashboard pousse, sans abonnement."""
+    return _dashboard(request).render(dict(request.query_params))
+
+
 async def _forward(queue: asyncio.Queue, websocket: WebSocket) -> None:
     while True:
         await websocket.send_json(await queue.get())
 
 
 async def _pump(websocket: WebSocket, queue: asyncio.Queue,
-                unsubscribe: Callable[[], None]) -> None:
+                unsubscribe: Callable[[], None],
+                on_text: Callable[[str], None] | None = None) -> None:
     """Deconnexion detectee en lecture, pas par un envoi en echec : un topic
-    muet n'enverrait rien. Messages du client ignores."""
+    muet n'enverrait rien. Messages du client ignores sans `on_text`."""
     sender = asyncio.create_task(_forward(queue, websocket))
     try:
-        while (await websocket.receive())["type"] != "websocket.disconnect":
-            pass
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if on_text and message.get("text") is not None:
+                on_text(message["text"])
     finally:
         # Desabonnement AVANT tout await : un await peut etre annule a l'arret
         unsubscribe()
@@ -67,7 +104,9 @@ async def _pump(websocket: WebSocket, queue: asyncio.Queue,
         await asyncio.gather(sender, return_exceptions=True)
 
 
-# Declaree AVANT /ws/{topic}, qui capturerait sinon "alerts" comme un topic
+# Declarees AVANT /ws/{topic}, qui capturerait sinon "alerts" ou "dashboard"
+# comme un topic
+
 @router.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket) -> None:
     """Snapshot des alertes actives a la connexion, puis chaque evenement."""
@@ -75,6 +114,26 @@ async def websocket_alerts(websocket: WebSocket) -> None:
     await websocket.accept()
     queue = service.subscribe()
     await _pump(websocket, queue, lambda: service.unsubscribe(queue))
+
+
+@router.websocket("/ws/dashboard")
+async def websocket_dashboard(websocket: WebSocket) -> None:
+    """Le client envoie les parametres de sa vue (JSON, cf. dashboard_views) ;
+    il recoit la vue aussitot, puis a chaque changement de donnees, et les
+    notifications d'alerte (`toast`)."""
+    service = _dashboard(websocket)
+    await websocket.accept()
+    queue = service.subscribe()
+
+    def select(text: str) -> None:
+        try:
+            params = json.loads(text)
+        except ValueError:
+            return
+        if isinstance(params, dict):
+            service.select(queue, params)
+
+    await _pump(websocket, queue, lambda: service.unsubscribe(queue), select)
 
 
 @router.websocket("/ws/{topic}")

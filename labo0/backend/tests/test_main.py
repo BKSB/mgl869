@@ -13,6 +13,7 @@ from app.data_management.data_processing.alert_rules import (
 )
 from app.data_management.record_bus import RecordBus
 from app.services.alert_service import AlertService
+from app.services.dashboard_service import DashboardService
 from tests.conftest import make_measurement, make_record
 
 
@@ -52,7 +53,7 @@ async def test_hub_subscribed_to_service_bus(run_main, created_buses):
     service = applications[0].state.streaming
     # Un seul bus, construit par create_bus
     (bus,) = created_buses
-    hub, _alerts = bus.observers
+    hub, _dashboard, _alerts = bus.observers
     assert isinstance(hub, TopicHub)
 
     # Le hub inscrit sur le bus est bien celui qui sert les clients WebSocket
@@ -69,17 +70,23 @@ async def test_alerts_subscribed_after_hub(run_main, created_buses):
     assert code == 0
     app = applications[0]
     (bus,) = created_buses
-    hub, alerts = bus.observers
-    # Ordre d'inscription : le hub d'abord (flux temps reel), puis les alertes
+    hub, dashboard, alerts = bus.observers
+    # Ordre d'inscription : le hub d'abord (flux temps reel), le dashboard
+    # (piece connue avant les notifications), puis les alertes
     assert isinstance(hub, TopicHub)
+    assert isinstance(dashboard, DashboardService)
     assert isinstance(alerts, AlertService)
-    # Le service inscrit est celui de l'API, avec les regles de la config
+    # Les services inscrits sont ceux de l'API, avec les regles de la config
     assert app.state.alerts is alerts
+    assert app.state.dashboard is dashboard
     assert alerts.enabled
     assert list(alerts.rules()) == ["topic.a"]
 
     await bus.publish("topic.a", make_measurement(1120, topic="topic.a"))
     assert [a["topic"] for a in alerts.active()] == ["topic.a"]
+    # Le dashboard connait les topics configures (onglets Par capteur)
+    assert [m["id"] for m in dashboard.render({"view": "metric"})["metrics"]] \
+        == ["a", "b"]
 
 
 def test_service_starts_with_alerts_disabled(run_main):

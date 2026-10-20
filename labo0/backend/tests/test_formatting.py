@@ -7,9 +7,11 @@ from app.data_management.data_processing.formatting import (
     MINUS,
     NARROW_NBSP as F,
     NBSP as G,
+    format_fixed,
     format_measured,
     format_number,
     format_quantity,
+    metric_for,
     topic_label,
 )
 
@@ -89,3 +91,39 @@ class TestFormatting:
     def test_fallback_label_is_last_segment(self):
         assert topic_label("gridd.obs.wind.wind_speed") == "Wind speed"
         assert topic_label("simple") == "Simple"
+
+
+class TestFixedDecimals:
+    @pytest.mark.parametrize("valeur,decimales,attendu", [
+        (21.0, 1, "21,0"),
+        (21.04, 1, "21,0"),
+        (21.05, 1, "21,1"),
+        (1240, 0, f"1{G}240"),
+        (1240.6, 0, f"1{G}241"),
+        (0, 2, "0,00"),
+        (-0.04, 1, "0,0"),
+        (-2.5, 1, f"{MINUS}2,5"),
+    ])
+    def test_format_fixed(self, valeur, decimales, attendu):
+        assert format_fixed(valeur, decimales) == attendu
+
+    def test_measured_starts_at_metric_decimals(self):
+        # CO2 sans decimale : une de plus seulement pour se distinguer du seuil
+        assert format_measured(1240, "ppm", 1000, decimals=0) == f"1{G}240{F}ppm"
+        assert format_measured(1000.4, "ppm", 1000, decimals=0) == \
+            f"1{G}000,4{F}ppm"
+
+
+class TestMetrics:
+    def test_known_topics(self):
+        temperature = metric_for(TEMPERATURE)
+        assert (temperature.id, temperature.decimals) == ("temperature", 1)
+        assert temperature.label == topic_label(TEMPERATURE)
+        assert (metric_for(CO2).id, metric_for(CO2).decimals) == ("co2", 0)
+        assert metric_for("gridd.obs.acoustic.sound_level").id == "sound_level"
+        assert metric_for("gridd.obs.occupancy.count").decimals == 0
+
+    def test_unknown_topic(self):
+        metric = metric_for("gridd.obs.wind.wind_speed")
+        assert (metric.id, metric.label, metric.decimals) == \
+            ("wind_speed", "Wind speed", 1)

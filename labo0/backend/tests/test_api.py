@@ -2,7 +2,9 @@
 taches Kafka simulees."""
 
 import asyncio
+import time
 from functools import partial
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +21,7 @@ from app.data_management.data_processing.alert_rules import (
 from app.main import create_app, create_bus
 from app.services import streaming_service
 from app.services.alert_service import AlertService
+from app.services.dashboard_service import DashboardService
 from app.services.streaming_service import StreamingService
 from tests.conftest import make_measurement, make_record
 
@@ -48,11 +51,15 @@ def make_client(monkeypatch, plaintext_settings, hub):
     monkeypatch.setattr(streaming_service, "warmup_topic", fake_warmup)
 
     def _make(alert_service: AlertService) -> TestClient:
-        # Meme assemblage que main() : le bus notifie le hub puis les alertes
-        bus = create_bus(hub, alert_service)
+        # Meme assemblage que main() : le bus notifie le hub, le dashboard
+        # puis les alertes
+        dashboard = DashboardService(["topic.a", "topic.b"], alert_service)
+        dashboard.REFRESH_MS = 50
+        bus = create_bus(hub, alert_service, dashboard)
         service = StreamingService(plaintext_settings(), hub, bus)
-        test_client = TestClient(create_app(service, alert_service))
+        test_client = TestClient(create_app(service, alert_service, dashboard))
         test_client.bus = bus  # point de publication des mesures de test
+        test_client.dashboard = dashboard
         return test_client
     return _make
 
@@ -63,11 +70,12 @@ def client(make_client, alerts):
         yield test_client
 
 
-def publish_measurement(client: TestClient, valeur, ts, offset) -> None:
+def publish_measurement(client: TestClient, valeur, ts, offset,
+                        node_id="n1") -> None:
     """Publie en temps reel DANS la boucle du serveur, comme le consommateur :
     sinon les abonnes WebSocket ne sont pas reveilles."""
     record = make_measurement(valeur, timestamp_ms=ts, offset=offset,
-                              topic="topic.a")
+                              topic="topic.a", node_id=node_id)
     client.portal.call(partial(client.bus.publish, "topic.a", record))
 
 
@@ -194,3 +202,108 @@ def test_websocket_unsubscribes_on_disconnect(client, hub):
     abonnes = hub._subscribers.get("topic.a", set())
     wait_for_unsubscribe(client, abonnes)
     assert not abonnes
+
+
+def now_ms() -> int:
+    """Mesures datees d'aujourd'hui : le jumeau ignore celles de plus de 24 h."""
+    return int(time.time() * 1000)
+
+
+class TestAcknowledge:
+    def test_acknowledges_active_alert(self, client):
+        publish_measurement(client, 1120, ts=100, offset=1)
+
+        response = client.post(f"/api/alerts/{quote('topic.a|n1', safe='')}"
+                               "/acknowledge", json={"by": "K. Brou"})
+
+        assert response.status_code == 200
+        alerte = response.json()["alert"]
+        assert alerte["acknowledged_by"] == "K. Brou"
+        assert isinstance(alerte["acknowledged_ms"], int)
+        assert client.get("/api/alerts").json()["active"][0] == alerte
+        assert client.get("/api/alerts").json()["recent"][0]["kind"] == \
+            "acknowledged"
+
+    def test_name_optional(self, client):
+        publish_measurement(client, 1120, ts=100, offset=1)
+        response = client.post("/api/alerts/topic.a%7Cn1/acknowledge")
+        assert response.status_code == 200
+        assert response.json()["alert"]["acknowledged_by"] == ""
+
+    def test_conflict_when_already_acknowledged(self, client):
+        publish_measurement(client, 1120, ts=100, offset=1)
+        client.post("/api/alerts/topic.a%7Cn1/acknowledge", json={"by": "A"})
+
+        response = client.post("/api/alerts/topic.a%7Cn1/acknowledge",
+                               json={"by": "B"})
+
+        assert response.status_code == 409
+        assert "A" in response.json()["detail"]
+
+    def test_not_found_without_active_alert(self, client):
+        response = client.post("/api/alerts/topic.a%7Cn1/acknowledge",
+                               json={"by": "A"})
+        assert response.status_code == 404
+        assert "topic.a|n1" in response.json()["detail"]
+
+
+class TestDashboard:
+    def test_get_view(self, client):
+        publish_measurement(client, 400, ts=now_ms(), offset=1)
+
+        response = client.get("/api/dashboard", params={"view": "metric",
+                                                        "metric": "a"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["type"] == "view"
+        assert body["view"] == "metric"
+        assert [s["id"] for s in body["metric"]["sensors"]] == ["n1"]
+
+    def test_websocket_view_then_refresh_and_toast(self, client):
+        with client.websocket_connect("/ws/dashboard") as ws:
+            ws.send_json({"view": "rooms"})
+            initial = ws.receive_json()
+            publish_measurement(client, 400, ts=now_ms(), offset=1)
+            refreshed = ws.receive_json()
+            # Alerte : notification immediate, puis la vue rafraichie
+            publish_measurement(client, 1120, ts=now_ms(), offset=2)
+            toast = ws.receive_json()
+            after_alert = ws.receive_json()
+
+        assert (initial["type"], initial["view"], initial["rooms"]) == \
+            ("view", "rooms", [])
+        assert [r["name"] for r in refreshed["rooms"]] == ["Zone A"]
+        # Topic inconnu de la table des metriques : 1 decimale
+        assert refreshed["room"]["sensors"][0]["value_text"] == "400,0"
+        assert toast["type"] == "toast"
+        assert toast["alert_id"] == "topic.a|n1"
+        assert toast["room_id"] == "z1"
+        assert after_alert["alerts_active"] == 1
+        assert after_alert["room"]["status"] == "warning"
+
+    def test_websocket_change_view(self, client):
+        publish_measurement(client, 1120, ts=now_ms(), offset=1)
+        with client.websocket_connect("/ws/dashboard") as ws:
+            ws.send_json({"view": "alerts", "filter": "all"})
+            alerts_view = ws.receive_json()
+            ws.send_json({"view": "metric", "metric": "b"})
+            metric_view = ws.receive_json()
+
+        assert [a["id"] for a in alerts_view["alerts"]] == ["topic.a|n1"]
+        assert metric_view["metric"]["id"] == "b"
+        assert metric_view["metric"]["sensors"] == []
+
+    def test_websocket_ignores_invalid_messages(self, client):
+        with client.websocket_connect("/ws/dashboard") as ws:
+            ws.send_text("pas du json")
+            ws.send_json(["liste"])
+            ws.send_json({"view": "alerts"})
+            assert ws.receive_json()["view"] == "alerts"
+
+    def test_websocket_unsubscribes_on_disconnect(self, client):
+        with client.websocket_connect("/ws/dashboard") as ws:
+            ws.send_json({"view": "rooms"})
+            ws.receive_json()
+        wait_for_unsubscribe(client, client.dashboard._subscriptions)
+        assert not client.dashboard._subscriptions

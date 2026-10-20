@@ -1,44 +1,44 @@
-import { useElementSize } from '../hooks/useElementSize'
+import type { Status, Threshold } from '../types'
+
+const W = 300
+const H = 56
+const PAD = 3
 
 interface Props {
-  values: number[]
+  points: [number, number][]
+  thresholds: Threshold[]
+  status: Status
 }
 
-/** Marge (px) : marqueur r 4 + moitie de l'anneau 2 px, sans rognage. */
-const PAD = 5
-
-/** Dessinee en pixels dans la boite mesuree (taille fixee par le CSS) : trait et
- * marqueur ne sont jamais mis a l'echelle. */
-export function Sparkline({ values }: Props) {
-  const [ref, { width, height }] = useElementSize<HTMLSpanElement>()
-  const n = values.length
-  if (n < 2) return null
-  const w = Math.round(width)
-  const h = Math.round(height)
-  let svg = null
-  if (w > 2 * PAD && h > 2 * PAD) {
-    let min = Infinity
-    let max = -Infinity
-    for (const v of values) {
-      if (v < min) min = v
-      if (v > max) max = v
-    }
-    const span = max - min || 1
-    // A gauche, seul le trait (1,5 px) doit tenir ; a droite, le marqueur
-    const x0 = 2
-    const xs = w - PAD - x0
-    const ys = h - 2 * PAD
-    const pts = values.map((v, i) => [x0 + (i / (n - 1)) * xs, h - PAD - ((v - min) / span) * ys] as const)
-    const body = pts.slice(0, n - 1).map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
-    const [px, py] = pts[n - 2]
-    const [lx, ly] = pts[n - 1]
-    svg = (
-      <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} aria-hidden="true" focusable="false">
-        <polyline points={body} fill="none" stroke="var(--spark)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-        <line x1={px} y1={py} x2={lx} y2={ly} stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" />
-        <circle cx={lx} cy={ly} r="4" fill="var(--accent)" stroke="var(--surface-1)" strokeWidth="2" />
-      </svg>
-    )
+/** Serie et seuils dans la meme echelle : un seuil hors de la serie reste
+ * visible (ligne pointillee), comme sur les maquettes. */
+export function Sparkline({ points, thresholds, status }: Props) {
+  if (points.length === 0) return <div className="spark spark--empty" aria-hidden="true" />
+  const values = [...points.map((p) => p[1]), ...thresholds.map((t) => t.value)]
+  let min = Math.min(...values)
+  let max = Math.max(...values)
+  if (max === min) {
+    min -= 1
+    max += 1
   }
-  return <span ref={ref} className="spark" aria-hidden="true">{svg}</span>
+  const t0 = points[0][0]
+  const span = points[points.length - 1][0] - t0 || 1
+  const x = (t: number) => (PAD + ((t - t0) / span) * (W - 2 * PAD)).toFixed(1)
+  const y = (v: number) => (PAD + ((max - v) / (max - min)) * (H - 2 * PAD)).toFixed(1)
+  const line = points.map(([t, v]) => `${x(t)},${y(v)}`)
+  const area = `M${x(t0)},${H} L${line.join(' L')} L${x(points[points.length - 1][0])},${H} Z`
+
+  return (
+    <svg className={`spark spark--${status}`} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+      <path className="spark-area" d={area} />
+      {thresholds.map((th, i) => (
+        <line key={i} className={`spark-threshold spark-threshold--${th.severity}`} x1={0} x2={W} y1={y(th.value)} y2={y(th.value)} />
+      ))}
+      {points.length === 1 ? (
+        <circle className="spark-dot" cx={x(t0)} cy={y(points[0][1])} r={2} />
+      ) : (
+        <polyline className="spark-line" points={line.join(' ')} />
+      )}
+    </svg>
+  )
 }

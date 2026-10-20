@@ -384,6 +384,74 @@ class TestSubscribers:
         assert message["event"]["alert"]["value"] == 1120
 
 
+class TestAcknowledge:
+    async def test_acknowledges_active_alert(self, service, emit):
+        queue = service.subscribe()
+        await emit(1120, ts=100)
+
+        acquittee = service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=150)
+
+        assert (acquittee["acknowledged_by"], acquittee["acknowledged_ms"]) == \
+            ("K. Brou", 150)
+        assert service.active() == [acquittee]
+        assert types(service) == ["raised", "acknowledged"]
+        evenement = service.recent()[0]
+        assert (evenement["at_ms"], evenement["alert"]) == (150, acquittee)
+        assert drain(queue)[-1] == {"type": "event", "event": evenement}
+
+    async def test_not_active(self, service, emit):
+        with pytest.raises(LookupError):
+            service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=1)
+        await emit(1120, ts=100)
+        await emit(900, ts=200)
+        with pytest.raises(LookupError):
+            service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=300)
+        with pytest.raises(LookupError):
+            service.acknowledge("sans-separateur", "K. Brou", at_ms=300)
+
+    async def test_already_acknowledged(self, service, emit):
+        await emit(1120, ts=100)
+        service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=150)
+        with pytest.raises(ValueError, match="K. Brou"):
+            service.acknowledge(f"{CO2}|n1", "M. Diallo", at_ms=160)
+
+    async def test_kept_until_resolved(self, service, emit):
+        await emit(1120, ts=100)
+        service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=150)
+        await emit(1600, ts=200)  # escalade : meme alerte, acquittement garde
+        await emit(1700, ts=250)  # mise a jour sans evenement
+        assert service.active()[0]["acknowledged_by"] == "K. Brou"
+
+        await emit(900, ts=300)  # resolue : l'evenement porte l'acquittement
+        assert service.recent()[0]["alert"]["acknowledged_by"] == "K. Brou"
+
+        await emit(1120, ts=400)  # nouvelle alerte : non acquittee
+        assert service.active()[0]["acknowledged_ms"] is None
+
+    async def test_listeners_notified_of_each_event(self, service, emit):
+        evenements = []
+        service.add_listener(evenements.append)
+
+        await emit(1120, ts=100)
+        service.acknowledge(f"{CO2}|n1", "K. Brou", at_ms=150)
+
+        assert [e.kind for e in evenements] == ["raised", "acknowledged"]
+        assert evenements == service.recent_events()[::-1]
+
+
+class TestAccessors:
+    async def test_active_by_sensor(self, service, emit):
+        await emit(1120, ts=100, node_id="a")
+        await emit(900, ts=100, node_id="b")
+        assert list(service.active_by_sensor()) == [(CO2, "a")]
+        assert service.active_by_sensor()[(CO2, "a")].to_dict() == \
+            service.active()[0]
+
+    def test_rules_for(self, service):
+        assert [r.threshold for r in service.rules_for(CO2)] == [1000, 1500]
+        assert service.rules_for("gridd.obs.occupancy.count") == ()
+
+
 class TestLogging:
     async def test_levels_per_event_kind(self, service, emit, caplog):
         with caplog.at_level(logging.INFO,

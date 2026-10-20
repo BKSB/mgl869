@@ -4,22 +4,26 @@ WebSocket ; l'evaluation pure vit dans data_processing/alert_rules.py."""
 import asyncio
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
 from app.config import AlertsConfig
 from app.data_management.data_distribution.queues import offer_or_reset
 from app.data_management.data_processing.alert_rules import (
+    ACKNOWLEDGED,
     DEESCALATED,
     ESCALATED,
     RAISED,
     RESOLVED,
     SEVERITY_RANK,
+    Alert,
     AlertEvent,
     AlertRule,
     SensorState,
     evaluate,
     measurement_from_record,
 )
+from app.data_management.records import OffsetTracker
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ _LOG_LEVELS = {
     ESCALATED: logging.WARNING,
     DEESCALATED: logging.INFO,
     RESOLVED: logging.INFO,
+    ACKNOWLEDGED: logging.INFO,
 }
 
 
@@ -65,10 +70,11 @@ class AlertService:
              if rules}
             if config.enabled else {})
         self._sensors: dict[tuple[str, str], _SensorTracker] = {}
-        # Plus haut offset evalue par (topic, partition)
-        self._offsets: dict[tuple[str, object], int] = {}
+        self._offsets = OffsetTracker()
         self._recent: deque[AlertEvent] = deque(maxlen=self.RECENT_SIZE)
         self._subscribers: set[asyncio.Queue] = set()
+        # Appeles a chaque evenement, dans la boucle asyncio (dashboard)
+        self._listeners: list[Callable[[AlertEvent], None]] = []
         if self._enabled:
             logger.info("Alertes actives : %d regle(s) sur %d topic(s) (%s)",
                         sum(len(r) for r in self._rules.values()),
@@ -84,7 +90,7 @@ class AlertService:
         if not rules:
             return
         measurement = measurement_from_record(topic, record)
-        if measurement is None or not self._mark_evaluated(topic, record):
+        if measurement is None or not self._offsets.accept(topic, record):
             return
         key = (topic, measurement.node_id)
         tracker = self._sensors.get(key)
@@ -106,19 +112,6 @@ class AlertService:
             for event in events:
                 self._emit(event)
 
-    def _mark_evaluated(self, topic: str, record: dict) -> bool:
-        """Faux si deja evalue : livraison au moins une fois, et prechauffage
-        et consommateur peuvent lire les memes records."""
-        offset = record.get("offset")
-        if not isinstance(offset, int) or isinstance(offset, bool):
-            return True  # sans offset, aucune relecture n'est detectable
-        key = (topic, record.get("partition"))
-        last = self._offsets.get(key)
-        if last is not None and offset <= last:
-            return False
-        self._offsets[key] = offset
-        return True
-
     def _emit(self, event: AlertEvent) -> None:
         self._recent.appendleft(event)
         alert = event.alert
@@ -128,6 +121,8 @@ class AlertService:
                    f" ({alert.location})" if alert.location else "",
                    alert.direction, alert.threshold, alert.unit, alert.value)
         self._send({"type": "event", "event": event.to_dict()})
+        for listener in self._listeners:
+            listener(event)
 
     def _snapshot(self) -> dict:
         return {"type": "snapshot", "active": self.active()}
@@ -135,6 +130,28 @@ class AlertService:
     def _send(self, message: dict) -> None:
         for queue in self._subscribers:
             offer_or_reset(queue, message, self._snapshot)
+
+    # --- Acquittement -------------------------------------------------------
+
+    def acknowledge(self, alert_id: str, by: str, at_ms: int) -> dict:
+        """Acquitte une alerte active (jusqu'a sa resolution) et emet un
+        evenement `acknowledged`. LookupError : aucune alerte active sous cet
+        id ; ValueError : deja acquittee."""
+        topic, _, node_id = alert_id.partition("|")
+        tracker = self._sensors.get((topic, node_id))
+        alert = tracker.state.alert if tracker else None
+        if alert is None:
+            raise LookupError(f"aucune alerte active : {alert_id}")
+        if alert.acknowledged_ms is not None:
+            raise ValueError(f"alerte deja acquittee par "
+                             f"{alert.acknowledged_by or 'un operateur'}")
+        alert = replace(alert, acknowledged_by=by, acknowledged_ms=at_ms)
+        tracker.state = replace(tracker.state, alert=alert)
+        self._emit(AlertEvent(ACKNOWLEDGED, at_ms, alert))
+        return alert.to_dict()
+
+    def add_listener(self, listener: Callable[[AlertEvent], None]) -> None:
+        self._listeners.append(listener)
 
     # --- Requetes de la couche API ------------------------------------------
 
@@ -146,17 +163,26 @@ class AlertService:
         return {topic: [rule.to_dict() for rule in rules]
                 for topic, rules in self._rules.items()}
 
+    def rules_for(self, topic: str) -> tuple[AlertRule, ...]:
+        return self._rules.get(topic, ())
+
     def active(self) -> list[dict]:
         """Critical d'abord, puis de la plus ancienne a la plus recente."""
         alerts = sorted(
-            (t.state.alert for t in self._sensors.values()
-             if t.state.alert is not None),
+            self.active_by_sensor().values(),
             key=lambda a: (-SEVERITY_RANK[a.severity], a.since_ms, a.id))
         return [alert.to_dict() for alert in alerts]
 
+    def active_by_sensor(self) -> dict[tuple[str, str], Alert]:
+        return {key: t.state.alert for key, t in self._sensors.items()
+                if t.state.alert is not None}
+
     def recent(self) -> list[dict]:
         """Le plus recent d'abord."""
-        return [event.to_dict() for event in self._recent]
+        return [event.to_dict() for event in self.recent_events()]
+
+    def recent_events(self) -> list[AlertEvent]:
+        return list(self._recent)
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=self.CLIENT_QUEUE_SIZE)

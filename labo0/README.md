@@ -1,10 +1,12 @@
 # Projet gridd — labo0
 
-- `backend/` : service Python qui consomme les topics Kafka du cluster gridd.
-- `frontend/` : dashboard Vite + React (selection du topic, donnees par capteur).
+- `backend/` : service Python qui consomme les topics Kafka du cluster gridd,
+  evalue les alertes et construit les vues du jumeau numerique.
+- `frontend/` : jumeau numerique Vite + React, trois ecrans (Par piece, Par
+  capteur, Alertes) ; aucune logique metier cote client.
 - `docker-compose.yml` : orchestration des services.
 
-## Frontend : dashboard temps reel
+## Frontend : jumeau numerique
 
 En Docker (avec le reste de la stack) :
 
@@ -23,14 +25,18 @@ En developpement (rechargement a chaud) :
 cd frontend
 npm install
 npm run dev     # http://localhost:5173 (le backend doit tourner sur :8000)
-npm test        # Vitest : fonctions pures de src/lib (non lance par la CI)
+npm test        # Vitest : routage par hash et formatage des heures
 ```
 
-Le dashboard charge la liste des topics (`GET /api/topics`), s'abonne au flux
-WebSocket du topic selectionne et affiche les series de chaque capteur
-(`sensor_id`) : tiles, graphe, legende et vue tableau (voir
-`frontend/README.md`). Le proxy Vite (`vite.config.ts`) redirige `/api` et
-`/ws` vers le backend — pas de CORS a gerer en dev.
+**Principe : le frontend n'applique aucune regle.** Il ouvre un seul
+WebSocket (`/ws/dashboard`), lui envoie les parametres de l'ecran affiche
+(piece, type de capteur, plage, tri, filtre) et affiche la vue complete que le
+backend renvoie, puis repousse a chaque changement de donnees (au plus une fois
+par seconde). Pieces, etats, libelles, seuils, nombres formates, tris, comptes
+et notifications viennent du backend (voir [Dashboard](#dashboard-jumeau-numerique)) ;
+le client ne formate que les heures (fuseau du navigateur) et trace les
+sparklines a partir des points fournis. Sa seule action est « Acquitter »
+(`POST /api/alerts/<id>/acknowledge`). Details dans `frontend/README.md`.
 
 ## Backend : consommateur Kafka
 
@@ -48,10 +54,11 @@ L'acquisition (consommateurs Kafka, prechauffage d'historique) ne connait
 qu'un **bus de records** (`app/data_management/record_bus.py`), le Sujet du
 patron Observateur : chaque record lui est publie, et il le transmet a tous
 les observateurs inscrits, un par un, dans l'ordre d'inscription. Le hub
-WebSocket est le premier observateur, le service d'alertes (voir
-[Alertes](#alertes)) le deuxieme ; un futur service (registre des capteurs,
-historique en base, qualite des donnees) devient un observateur de plus,
-inscrit dans `app/main.py`, sans toucher a l'acquisition.
+WebSocket est le premier observateur, le dashboard (jumeau numerique, voir
+[Dashboard](#dashboard-jumeau-numerique)) le deuxieme, le service d'alertes
+(voir [Alertes](#alertes)) le troisieme ; un futur service (historique en
+base, qualite des donnees) devient un observateur de plus, inscrit dans
+`app/main.py`, sans toucher a l'acquisition.
 
 Contrat d'un observateur (protocole `RecordObserver`) :
 
@@ -61,7 +68,7 @@ Contrat d'un observateur (protocole `RecordObserver`) :
   car elle retarde les observateurs suivants et le commit ;
 - **idempotente** : la livraison est "au moins une fois" et le prechauffage
   peut relire des messages deja vus (un record est identifie par `topic`,
-  `partition`, `offset`) ;
+  `partition`, `offset` ; `records.OffsetTracker` fournit ce filtre) ;
 - `replay=True` signale un record relu au demarrage (prechauffage) ou
   anterieur de plus de 5 minutes au demarrage du service (rattrapage d'un
   arret prolonge, ou de toute la retention quand le groupe n'a pas d'offset
@@ -102,6 +109,7 @@ class SensorRegistry:  # ex. app/services/sensor_registry.py
 # app/main.py, dans create_bus() : les observateurs s'inscrivent ici
 bus = RecordBus()
 bus.subscribe(hub)               # diffusion WebSocket (1er observateur)
+bus.subscribe(dashboard)         # jumeau numerique (vues du dashboard)
 bus.subscribe(alerts)            # service d'alertes
 bus.subscribe(SensorRegistry())  # nouvel observateur, acquisition inchangee
 ```
@@ -230,10 +238,18 @@ donnees** :
   de l'alerte sont ceux de la regle active la plus severe (a egalite, celle
   que la valeur depasse le plus).
 - **Evenements** : aucun -> X `raised` ; warning -> critical `escalated` ;
-  critical -> warning `deescalated` ; X -> aucun `resolved`. Un passage direct
-  de "trop haut" a "trop bas" d'une mesure a l'autre est une autre alerte :
-  `resolved` puis `raised`. Sans changement de niveau, l'alerte active est
-  seulement mise a jour (valeur, horodatage), sans evenement.
+  critical -> warning `deescalated` ; X -> aucun `resolved` ; acquittement
+  par un operateur `acknowledged`. Un passage direct de "trop haut" a "trop
+  bas" d'une mesure a l'autre est une autre alerte : `resolved` puis `raised`.
+  Sans changement de niveau, l'alerte active est seulement mise a jour
+  (valeur, horodatage), sans evenement.
+- **Acquittement** : `POST /api/alerts/<id>/acknowledge` avec
+  `{ "by": "<nom>" }` (nom optionnel) marque l'alerte active comme acquittee
+  (`acknowledged_by`, `acknowledged_ms`) jusqu'a sa resolution, escalade
+  comprise ; une nouvelle alerte sur le meme capteur repart non acquittee.
+  `404` si aucune alerte active ne porte cet id, `409` si elle est deja
+  acquittee. L'acquittement ne change ni la severite ni la resolution, qui
+  restent decidees par les mesures.
 - **Replay : etat reconstruit, sans evenement** : les records rejoues
   (prechauffage, ou rattrapage anterieur de plus de 5 minutes au demarrage,
   `replay=True`) mettent a jour l'etat des capteurs mais ne produisent aucun
@@ -263,8 +279,9 @@ Alert      { id: "<topic>|<node_id>", topic, node_id, severity: "warning"|"criti
              location (zone.label, sinon space.label, sinon ""),
              since_ms (debut de l'alerte, horodatage de la mesure),
              updated_ms (derniere mesure evaluee),
-             message (ex. "CO2 au-dessus de 1 000 ppm (1 120 ppm)") }
-AlertEvent { kind: "raised"|"escalated"|"deescalated"|"resolved", at_ms, alert }
+             message (ex. "CO2 au-dessus de 1 000 ppm (1 120 ppm)"),
+             acknowledged_by ("" si non acquittee), acknowledged_ms (null si non acquittee) }
+AlertEvent { kind: "raised"|"escalated"|"deescalated"|"resolved"|"acknowledged", at_ms, alert }
 AlertRule  { severity, direction, threshold, hysteresis }
 ```
 
@@ -289,8 +306,55 @@ AlertRule  { severity, direction, threshold, hysteresis }
   insecable U+00A0 pour les milliers et espace fine insecable U+202F avant
   l'unite, vrai signe moins U+2212). La valeur garde assez de decimales (3 au
   plus) pour ne jamais s'ecrire comme le seuil : "au-dessus de 26 °C
-  (26,04 °C)". Le dashboard compose ses propres textes a partir des champs
-  structures, avec les decimales de chaque topic.
+  (26,04 °C)". Les vues du dashboard appliquent le meme formatage, avec les
+  decimales de chaque topic (`formatting.METRICS`).
+
+### Dashboard (jumeau numerique)
+
+Le `DashboardService` (`app/services/dashboard_service.py`) est un observateur
+du bus : il alimente le jumeau numerique (`data_processing/digital_twin.py`,
+dernier etat et historique glissant de 24 h de chaque capteur, situe dans sa
+piece : `metadata.zone`, sinon `metadata.space`, avec `storey` et `building`)
+et pousse aux clients de `/ws/dashboard` des vues pretes a afficher
+(`data_processing/dashboard_views.py`, logique pure). Le frontend n'applique
+aucune regle : etats, libelles (« Normal », « Warning », « Erreur »), nombres
+formates, seuils, tris, comptes et notifications sont calcules ici.
+
+Protocole de `/ws/dashboard` : le client envoie en JSON les parametres de
+l'ecran qu'il affiche, le backend repond aussitot par la vue complete, puis la
+renvoie a chaque changement de donnees (regroupe, au plus une fois par
+seconde) ; une alerte declenchee ou escaladee arrive en plus comme
+notification. `GET /api/dashboard?view=...` rend la meme vue sans abonnement
+(memes parametres en query string).
+
+```text
+Parametres  { view: "rooms",  room?: <id>,     range?: "15m"|"1h"|"24h" }
+            { view: "metric", metric?: <id>,   range?, sort?: "severity"|"room"|"value" }
+            { view: "alerts", filter?: "active"|"acknowledged"|"resolved"|"all" }
+            (valeur absente ou inconnue : defaut ; premiere piece, premier topic)
+
+Vue         { type: "view", site (batiment), alerts_enabled, alerts_active (non acquittees),
+              ranges: [{ id, label }], view, ... }
+  rooms     rooms: [{ id, name, floor, status }],
+            room: { id, name, floor, building, status, status_label, summary, last_ms,
+                    range, sensors: [Tuile] } | null (piece inconnue)
+  metric    metrics: [{ id, label }] (onglets, ordre de topics.yaml),
+            metric: { id, label, unit, thresholds, summary, counts: [{ status, text }],
+                      range, sort, sorts: [{ id, label }], sensors: [Tuile] }
+  alerts    filter, filters: [{ id, label, count }], summary,
+            alerts: [{ id, key, severity, severity_label, room, metric_label, sensor_id,
+                       value_text, threshold_text, since_ms, state, state_label,
+                       state_ms, can_ack }]
+Tuile       { id, metric, label, unit, room: { id, name, floor }, value_text, status,
+              status_label, updated_ms, thresholds: [{ severity, value, text, short }],
+              points: [[t_ms, valeur]] (120 au plus), stats_text ("1 h : min … · max …") }
+Toast       { type: "toast", id, severity, severity_label, at_ms, title, value_text, text,
+              alert_id, room_id }
+```
+
+`status` vaut `normal`, `warning` ou `critical` ; l'etat d'une piece est le
+pire de ses capteurs. Une alerte est `active`, `acknowledged` ou `resolved`
+(les resolues viennent des 200 derniers evenements).
 
 ### Fichiers d'environnement
 
@@ -319,8 +383,11 @@ pour tous les capteurs, meme les plus lents.
 |---|---|
 | `ws://localhost:8000/ws/<topic>` | Flux temps reel du topic (ex. `/ws/gridd.obs.environmental.temperature`) |
 | `ws://localhost:8000/ws/alerts` | Alertes : snapshot des alertes actives, puis chaque evenement (voir [Alertes](#alertes)) |
+| `ws://localhost:8000/ws/dashboard` | Vues du jumeau numerique et notifications (voir [Dashboard](#dashboard-jumeau-numerique)) |
 | `GET http://localhost:8000/api/topics` | Liste des topics et l'URL WebSocket de chacun |
 | `GET http://localhost:8000/api/alerts` | Alertes actives, evenements recents et regles par topic |
+| `POST http://localhost:8000/api/alerts/<id>/acknowledge` | Acquitte une alerte active (`{ "by": "<nom>" }`) |
+| `GET http://localhost:8000/api/dashboard?view=...` | Une vue du dashboard, sans abonnement |
 | `GET http://localhost:8000/health` | Etat du service et de chaque consommateur |
 
 Exemple cote frontend (React) :
@@ -363,7 +430,8 @@ commit ses offsets apres traitement de chaque message, puis se ferme.
 Tests unitaires (pytest) dans `backend/tests/` : bus de records (patron
 Observateur), hub WebSocket, consommateur, prechauffage d'historique,
 configuration (topics et alertes), evaluation des regles d'alerte, service
-d'alertes, couche service, composition root et API. Kafka est simule,
+d'alertes (acquittement compris), jumeau numerique, vues et service du
+dashboard, couche service, composition root et API. Kafka est simule,
 aucun broker n'est necessaire.
 
 ```bash
