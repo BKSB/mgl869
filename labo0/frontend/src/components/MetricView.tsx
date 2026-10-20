@@ -32,7 +32,7 @@ export function MetricView({ data, range, onRange, onSort, now }: Props) {
         <>
           <div className="page-head">
             <div>
-              <h1 className="page-title">{metric.label} · toutes les pièces</h1>
+              <h1 className="page-title">{metric.label}</h1>
               <div className="page-meta">
                 <span>{metric.summary}</span>
                 {metric.counts.map((c) => (
